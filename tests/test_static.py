@@ -32,19 +32,20 @@ def test_settings_menu_has_only_reset_tutorial_control():
     assert "char items[6][72]" in settings
 
 
-def test_reader_tutorial_does_not_draw_status_under_overlay():
-    draw_page = body_of("draw_page")
-    assert "if (r->tutorial_mode) {\n        draw_tutorial_overlay(r);" in draw_page
-    tutorial_branch = draw_page.split("if (r->tutorial_mode)", 1)[1].split("} else {", 1)[0]
-    assert "draw_text(r->gc, status" not in tutorial_branch
-    assert "gui_gc_drawLine" not in tutorial_branch
-
-
-def test_reader_tutorial_overlay_stays_above_footer():
-    overlay = body_of("draw_tutorial_overlay")
-    assert "int box_y = 126;" in overlay
-    assert "box_y = 164" not in overlay
-    assert "SCREEN_H - 15" not in overlay
+def test_old_reader_tutorial_flow_is_removed():
+    forbidden = [
+        "tutorial_mode",
+        "tutorial_step",
+        "draw_tutorial_overlay",
+        "create_tutorial_demo",
+        "cleanup_tutorial_demo",
+        "TUTORIAL_DEMO_FILE",
+        "TXT_TUTORIAL_STEP",
+    ]
+    for token in forbidden:
+        assert token not in APP
+        assert token not in STRINGS
+    assert not re.search(r"open_reader\([^;\n]+,\s*[01]\)", APP)
 
 
 def test_interactive_tutorial_requires_real_keys_and_keeps_skip_inside_tutorial():
@@ -57,13 +58,37 @@ def test_interactive_tutorial_requires_real_keys_and_keeps_skip_inside_tutorial(
     assert "FOOTER_Y" not in tutorial
     assert "step->body3" not in tutorial
     assert "TUTORIAL_ALL_SKIPPED" in tutorial
+    assert tutorial.count("{TUTORIAL_SCREEN_") >= 28
+
+
+def test_interactive_tutorial_simulates_results_after_keys():
+    tutorial = body_of("tutorial_center_page")
+    for screen in [
+        "TUTORIAL_SCREEN_BROWSER_SELECTED",
+        "TUTORIAL_SCREEN_READER_PAGE2",
+        "TUTORIAL_SCREEN_READER_TOP",
+        "TUTORIAL_SCREEN_SEARCH_NEXT",
+        "TUTORIAL_SCREEN_JUMP",
+        "TUTORIAL_SCREEN_BOOKMARK",
+        "TUTORIAL_SCREEN_HOME_RECENT",
+        "TUTORIAL_SCREEN_SETTINGS_FONT",
+        "TUTORIAL_SCREEN_SETTINGS_THEME",
+        "TUTORIAL_SCREEN_SETTINGS_MARGIN",
+    ]:
+        assert screen in tutorial
+    assert "教学中心" not in tutorial
+    assert "跳过所有教学" not in tutorial
 
 
 def test_tutorial_mock_reader_uses_wrapping_for_long_lines():
     mock = body_of("tutorial_mock_screen")
-    assert 'draw_wrapped_text(gc, "这是正文阅读区。左右翻页，上下按行移动。"' in mock
     assert 'draw_wrapped_text(gc, "按快捷键可以搜索、跳转、书签和打开菜单。"' in mock
+    assert "这是第二页。刚才按右键以后，页面已经前进。" in mock
+    assert "已在当前位置添加书签。" in mock
+    assert "Ctrl+下 已经跳到结尾。" in mock
     assert "TXT_SEARCH_MODE_HINT" not in mock
+    assert "教学中心" not in mock
+    assert "跳过所有教学" not in mock
 
 
 def test_tutorial_strings_remain_available_for_messages():
@@ -74,9 +99,9 @@ def test_tutorial_strings_remain_available_for_messages():
 if __name__ == "__main__":
     tests = [
         test_settings_menu_has_only_reset_tutorial_control,
-        test_reader_tutorial_does_not_draw_status_under_overlay,
-        test_reader_tutorial_overlay_stays_above_footer,
+        test_old_reader_tutorial_flow_is_removed,
         test_interactive_tutorial_requires_real_keys_and_keeps_skip_inside_tutorial,
+        test_interactive_tutorial_simulates_results_after_keys,
         test_tutorial_mock_reader_uses_wrapping_for_long_lines,
         test_tutorial_strings_remain_available_for_messages,
     ]
