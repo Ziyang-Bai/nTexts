@@ -776,7 +776,14 @@ typedef enum {
     TUTORIAL_SCREEN_SEARCH,
     TUTORIAL_SCREEN_SEARCH_NEXT,
     TUTORIAL_SCREEN_JUMP,
+    TUTORIAL_SCREEN_JUMP_INPUT,
+    TUTORIAL_SCREEN_JUMP_RESULT,
     TUTORIAL_SCREEN_BOOKMARK,
+    TUTORIAL_SCREEN_BOOKMARK_LIST,
+    TUTORIAL_SCREEN_BOOKMARK_ACTION,
+    TUTORIAL_SCREEN_BOOKMARK_JUMP,
+    TUTORIAL_SCREEN_BOOKMARK_DELETE,
+    TUTORIAL_SCREEN_FILE_INFO,
     TUTORIAL_SCREEN_MENU,
     TUTORIAL_SCREEN_SETTINGS,
     TUTORIAL_SCREEN_SETTINGS_FONT,
@@ -856,7 +863,9 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
     } else if (screen == TUTORIAL_SCREEN_READER || screen == TUTORIAL_SCREEN_READER_PAGE2 ||
                screen == TUTORIAL_SCREEN_READER_TOP || screen == TUTORIAL_SCREEN_READER_END ||
                screen == TUTORIAL_SCREEN_SEARCH || screen == TUTORIAL_SCREEN_SEARCH_NEXT ||
-               screen == TUTORIAL_SCREEN_JUMP || screen == TUTORIAL_SCREEN_BOOKMARK) {
+               screen == TUTORIAL_SCREEN_JUMP || screen == TUTORIAL_SCREEN_JUMP_INPUT ||
+               screen == TUTORIAL_SCREEN_JUMP_RESULT || screen == TUTORIAL_SCREEN_BOOKMARK ||
+               screen == TUTORIAL_SCREEN_BOOKMARK_JUMP) {
         const char *page = "1/8页  12%  UTF-8";
         draw_text(gc, "nTexts 教学演示文档", 10, 12, Bold10, t->fg);
         if (screen == TUTORIAL_SCREEN_READER_PAGE2) {
@@ -875,12 +884,26 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
             draw_wrapped_text(gc, "适合快速检查文档末尾。", 10, 86, SCREEN_W - 20, Regular10, t->fg);
         } else if (screen == TUTORIAL_SCREEN_JUMP) {
             draw_text(gc, "跳转", 8, 36, Bold10, t->fg);
+            set_color(gc, t->highlight_bg);
+            gui_gc_fillRect(gc, 14, 62, 116, 20);
             draw_text(gc, "1. 百分比", 18, 66, Regular10, t->fg);
             draw_text(gc, "2. 页码", 18, 90, Regular10, t->fg);
             draw_text(gc, "3. 物理行号", 18, 114, Regular10, t->fg);
+        } else if (screen == TUTORIAL_SCREEN_JUMP_INPUT) {
+            draw_text(gc, "跳转到百分比", 8, 42, Bold10, t->fg);
+            draw_text(gc, "输入: 50", 28, 78, Regular10, t->fg);
+            draw_text(gc, "确认后会跳到全书中间。", 28, 110, Regular9, t->muted);
+        } else if (screen == TUTORIAL_SCREEN_JUMP_RESULT) {
+            page = "4/8页  50%  UTF-8";
+            draw_wrapped_text(gc, "已经跳到 50% 附近。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
+            draw_wrapped_text(gc, "页码、百分比和物理行号都可以这样跳。", 10, 82, SCREEN_W - 20, Regular10, t->fg);
         } else if (screen == TUTORIAL_SCREEN_BOOKMARK) {
             draw_wrapped_text(gc, "已在当前位置添加书签。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
             draw_wrapped_text(gc, "以后可在 Menu 的管理书签里返回这里。", 10, 86, SCREEN_W - 20, Regular10, t->fg);
+        } else if (screen == TUTORIAL_SCREEN_BOOKMARK_JUMP) {
+            page = "2/8页  25%  UTF-8";
+            draw_wrapped_text(gc, "已经跳回刚才那个书签。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
+            draw_wrapped_text(gc, "书签适合记住章节或重要位置。", 10, 82, SCREEN_W - 20, Regular10, t->fg);
         } else if (screen == TUTORIAL_SCREEN_SEARCH || screen == TUTORIAL_SCREEN_SEARCH_NEXT) {
             const char *hit = screen == TUTORIAL_SCREEN_SEARCH ? "找到的内容会这样标出来。" : "这里是下一处结果，页面已经跟着跳过去了。";
             page = screen == TUTORIAL_SCREEN_SEARCH ? "3/8页  搜索中" : "5/8页  搜索中";
@@ -896,6 +919,36 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
         }
         if (screen != TUTORIAL_SCREEN_SEARCH && screen != TUTORIAL_SCREEN_SEARCH_NEXT)
             draw_text(gc, page, 6, SCREEN_H - 15, Regular9, t->muted);
+    } else if (screen == TUTORIAL_SCREEN_BOOKMARK_LIST || screen == TUTORIAL_SCREEN_BOOKMARK_ACTION ||
+               screen == TUTORIAL_SCREEN_BOOKMARK_DELETE) {
+        draw_text(gc, screen == TUTORIAL_SCREEN_BOOKMARK_ACTION ? "书签操作" : "管理书签", 8, 6, Bold10, t->fg);
+        if (screen == TUTORIAL_SCREEN_BOOKMARK_LIST) {
+            set_color(gc, t->highlight_bg);
+            gui_gc_fillRect(gc, 4, 34, SCREEN_W - 8, 20);
+            draw_text(gc, "1. 第2页  25%", 10, 36, Regular10, t->fg);
+            draw_text(gc, TXT_FOOTER_LIST, 8, FOOTER_Y, Regular9, t->muted);
+        } else if (screen == TUTORIAL_SCREEN_BOOKMARK_ACTION) {
+            set_color(gc, t->highlight_bg);
+            gui_gc_fillRect(gc, 4, 34, SCREEN_W - 8, 20);
+            draw_text(gc, "1. 跳转", 10, 36, Regular10, t->fg);
+            draw_text(gc, "2. 删除", 10, 58, Regular10, t->fg);
+            draw_text(gc, "3. 取消", 10, 80, Regular10, t->fg);
+            draw_text(gc, TXT_FOOTER_LIST, 8, FOOTER_Y, Regular9, t->muted);
+        } else {
+            draw_text(gc, "书签已删除", 10, 54, Regular10, t->fg);
+            draw_text(gc, "这里暂时没有书签。", 10, 84, Regular10, t->muted);
+            draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
+        }
+    } else if (screen == TUTORIAL_SCREEN_FILE_INFO) {
+        draw_text(gc, "文件信息", 10, 8, Bold12, t->fg);
+        draw_text(gc, "名称: tutorial_demo.txt.tns", 10, 42, Regular10, t->fg);
+        draw_text(gc, "路径:", 10, 68, Regular10, t->fg);
+        draw_wrapped_text(gc, "/documents/nTexts/tutorial_demo.txt.tns", 10, 90, SCREEN_W - 20, Regular9, t->fg);
+        draw_text(gc, "大小: 2048 字节", 10, 128, Regular9, t->fg);
+        draw_text(gc, "编码: UTF-8", 10, 146, Regular9, t->fg);
+        draw_text(gc, "行数: 48", 10, 164, Regular9, t->fg);
+        draw_text(gc, "页数: 8", 10, 182, Regular9, t->fg);
+        draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
     } else if (screen == TUTORIAL_SCREEN_MENU) {
         const char *items[] = {"1. 添加书签", "2. 管理书签", "3. 搜索", "4. 向后查找",
                                "5. 向前查找", "6. 跳转", "7. 阅读设置", "8. 文件信息", "9. 返回书库"};
@@ -929,24 +982,35 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
         {TUTORIAL_SCREEN_BROWSER_SELECTED, "进入或打开", "选中文件夹时 Enter 进入。", "选中文本文件时 Enter 打开。", "请按 Enter 打开演示文档。", 5, 0, 6, 50, 220, 24},
         {TUTORIAL_SCREEN_LOADING, "加载和索引", "首次打开会识别编码并建立分页索引。", "索引会缓存，下次打开会更快。", "请按 Enter 继续。", 5, 0, 42, 96, 236, 36},
         {TUTORIAL_SCREEN_READER, "阅读正文", "这是阅读区。", "左右翻页，上下按原文本物理行移动。", "请按右键翻到下一页。", 4, 0, 6, 8, 308, 176},
-        {TUTORIAL_SCREEN_READER_PAGE2, "返回上一页", "左键会回到上一页。", "阅读进度将会保存，重新进入将会自动续读。", "请按左键。", 3, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_READER_PAGE2, "返回上一页", "阅读进度将会保存，", "重新进入将会自动续读。", "请按左键。", 3, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_READER, "快捷跳到开头", "先回到了第一页。", "Ctrl+上 会跳到整本书开头。", "请按 Ctrl+上。", 1, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_READER_TOP, "快捷跳到结尾", "现在已经在开头。", "Ctrl+下 会跳到整本书结尾。", "请按 Ctrl+下。", 2, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_READER_END, "搜索快捷键", "已经跳到结尾。", "按 F 搜索文字，找到后会直接跳过去并标出来。", "请按 F。", 9, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_SEARCH, "继续找下一个", "现在已经找到一处。", "按 Enter 或下键继续找下一个，上键回到上一个。", "请按 Enter 找下一处。", 5, 0, 6, 62, 308, 30},
         {TUTORIAL_SCREEN_SEARCH_NEXT, "回到上一个结果", "页面已经跳到下一处结果。", "如果跳过头了，按上键回到上一处。", "请按上键。", 1, 0, 6, 62, 308, 30},
         {TUTORIAL_SCREEN_READER, "跳转快捷键", "G 打开跳转。", "可以按百分比、页码或物理行号跳转。", "请按 G。", 10, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_JUMP, "跳转菜单", "这里选择跳转方式。", "实际使用时输入数值后会立刻定位。", "请按 Enter 回到阅读。", 5, 0, 6, 32, 130, 104},
+        {TUTORIAL_SCREEN_JUMP, "跳转菜单", "先选择跳转方式。", "这里选百分比。", "请按 1。", 21, 0, 14, 62, 116, 20},
+        {TUTORIAL_SCREEN_JUMP_INPUT, "输入跳转位置", "输入 50，表示跳到全书中间。", "确认后就会过去。", "请按 Enter。", 5, 0, 24, 72, 180, 48},
+        {TUTORIAL_SCREEN_JUMP_RESULT, "已经跳转", "现在到了 50% 附近。", "实际阅读时会回到对应页面。", "请按 Enter 继续。", 5, 0, 6, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_READER, "书签快捷键", "B 可以直接添加书签。", "Menu 里可以管理书签。", "请按 B。", 8, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_BOOKMARK, "书签已保存", "当前位置已经保存为书签。", "以后可以从管理书签跳回来。", "请按 Enter 继续。", 5, 0, 6, 38, 308, 68},
         {TUTORIAL_SCREEN_READER, "打开功能菜单", "Menu 打开完整功能菜单。", "下面会逐项练习菜单。", "请按 Menu。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_MENU, "菜单 1: 添加书签", "添加当前位置书签。", "也可以直接按 B。", "请按 1。", 21, 0, 6, 28, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 2: 管理书签", "查看、跳转或删除已有书签。", "书签保存在当前书状态中。", "请按 2。", 22, 0, 6, 47, 170, 20},
+        {TUTORIAL_SCREEN_MENU, "菜单 2: 管理书签", "这里可以回到书签，", "也可以删掉不用的书签。", "请按 2。", 22, 0, 6, 47, 170, 20},
+        {TUTORIAL_SCREEN_BOOKMARK_LIST, "选择书签", "先选一个书签。", "按 Enter 打开操作菜单。", "请按 Enter。", 5, 0, 6, 32, 170, 24},
+        {TUTORIAL_SCREEN_BOOKMARK_ACTION, "跳到书签", "选“跳转”会回到这个位置。", "这和真正阅读时一样。", "请按 1。", 21, 0, 6, 32, 130, 24},
+        {TUTORIAL_SCREEN_BOOKMARK_JUMP, "已经跳到书签", "页面回到了书签位置。", "现在再演示删除书签。", "请按 Menu。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_MENU, "再次打开书签", "回到菜单后再次进入管理书签。", "这次删掉刚才的书签。", "请按 2。", 22, 0, 6, 47, 170, 20},
+        {TUTORIAL_SCREEN_BOOKMARK_LIST, "选择要删除的书签", "还是先选中书签。", "按 Enter 打开操作菜单。", "请按 Enter。", 5, 0, 6, 32, 170, 24},
+        {TUTORIAL_SCREEN_BOOKMARK_ACTION, "删除书签", "在操作菜单里选“删除”。", "删除后正文不会受影响。", "请按 2。", 22, 0, 6, 54, 130, 24},
+        {TUTORIAL_SCREEN_BOOKMARK_DELETE, "书签已删除", "书签列表已经清空。", "以后也可以这样整理书签。", "请按 Enter 继续。", 5, 0, 6, 52, 220, 48},
         {TUTORIAL_SCREEN_MENU, "菜单 3: 搜索", "输入想找的字词。", "找到后会跳到对应位置并标出来。", "请按 3。", 23, 0, 6, 66, 170, 20},
         {TUTORIAL_SCREEN_MENU, "菜单 4/5: 继续查找", "4 继续找下一个，5 回到上一个。", "会沿用刚才输入的搜索词。", "请按 4。", 24, 0, 6, 85, 190, 40},
         {TUTORIAL_SCREEN_MENU, "菜单 6: 跳转", "按百分比、页码或物理行号跳转。", "也可以直接按 G。", "请按 6。", 26, 0, 6, 123, 170, 20},
         {TUTORIAL_SCREEN_MENU, "菜单 7: 阅读设置", "调整字号、主题和边距。", "设置变化会重建当前书索引。", "请按 7。", 27, 0, 6, 142, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 8/9: 信息和返回", "8 查看文件信息，9 返回书库。", "返回书库也可以按 Esc。", "请按 8。", 28, 0, 6, 161, 190, 40},
+        {TUTORIAL_SCREEN_MENU, "菜单 8: 文件信息", "这里能看到文件名、路径、编码和页数。", "需要确认文件时很有用。", "请按 8。", 28, 0, 6, 161, 170, 20},
+        {TUTORIAL_SCREEN_FILE_INFO, "查看文件信息", "这就是文件信息页。", "看完按 Enter 或 Esc 返回。", "请按 Enter。", 5, 0, 8, 8, 304, 198},
+        {TUTORIAL_SCREEN_MENU, "菜单 9: 返回书库", "9 返回书库。", "返回书库也可以直接按 Esc。", "请按 9。", 29, 0, 6, 180, 170, 20},
         {TUTORIAL_SCREEN_HOME_RECENT, "从最近阅读进入", "打开过的书会出现在最近阅读。", "选中最近阅读后 Enter 继续阅读。", "请按 Enter。", 5, 0, 6, 50, 240, 24},
         {TUTORIAL_SCREEN_HOME, "打开阅读设置", "主页按 (-) 打开阅读设置。", "也可在阅读菜单中打开。", "请按 (-)。", 13, 0, 6, 114, 180, 24},
         {TUTORIAL_SCREEN_SETTINGS, "更改字号", "设置里按 1 或 Enter/左右切换字号。", "大字号会重新分页。", "请按 1。", 21, 0, 6, 28, 292, 22},
@@ -960,6 +1024,8 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
         char footer[96];
         int panel_y;
         const TutorialStep *step = &steps[i];
+        app_log("tutorial", "step %d/%d title=%s expect=%s ctrl=%d",
+                i + 1, count, step->title, tutorial_key_label(step), step->need_ctrl);
         panel_y = step->y > 118 ? 18 : 136;
         gui_gc_begin(gc);
         tutorial_mock_screen(gc, t, step->screen);
@@ -978,13 +1044,18 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
         key = wait_key();
         ctrl = isKeyPressed(KEY_NSPIRE_CTRL);
         wait_release();
+        app_log("tutorial", "key step=%d got=%d ctrl=%d expect=%d need_ctrl=%d",
+                i + 1, key, ctrl, step->key, step->need_ctrl);
         if (key == 12 && step->key != 12) {
             app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
             storage_save_app(app, data_dir);
             app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
             return;
         }
-        if (key == step->key && (!step->need_ctrl || ctrl)) i++;
+        if (key == step->key && (!step->need_ctrl || ctrl)) {
+            i++;
+            app_log("tutorial", "advance next=%d/%d", i + 1, count);
+        }
     }
 }
 
