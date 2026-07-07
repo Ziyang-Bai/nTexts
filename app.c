@@ -671,11 +671,11 @@ static int search_forward(Reader *r, const uint16_t *query, uint32_t from, TextP
 
 static uint32_t next_char_offset(Reader *r, TextPosition pos);
 
-static int search_backward(Reader *r, const uint16_t *query, TextPosition *hit) {
+static int search_backward(Reader *r, const uint16_t *query, uint32_t before, TextPosition *hit) {
     TextPosition found;
     uint32_t from = r->text.data_start;
     int ok = 0;
-    while (search_forward(r, query, from, &found) && found.byte_offset < r->top.byte_offset) {
+    while (search_forward(r, query, from, &found) && found.byte_offset < before) {
         *hit = found;
         from = next_char_offset(r, found);
         ok = 1;
@@ -695,6 +695,7 @@ static uint32_t next_char_offset(Reader *r, TextPosition pos) {
 static int do_search(Reader *r, int direction, int reuse) {
     TextPosition hit;
     uint16_t query[QUERY_LEN];
+    uint32_t anchor;
     memcpy(query, r->last_query, sizeof(query));
     if (!reuse && !query_from_user(r, query)) return 0;
     memcpy(r->last_query, query, sizeof(r->last_query));
@@ -703,13 +704,17 @@ static int do_search(Reader *r, int direction, int reuse) {
         storage_save_app(r->app, r->data_dir);
     }
     if (direction >= 0) {
-        if (!search_forward(r, query, next_char_offset(r, r->top), &hit)) {
+        anchor = (reuse && r->hit_offset) ? r->hit_offset : r->top.byte_offset;
+        if (!search_forward(r, query, next_char_offset(r, (TextPosition){anchor, r->top.source_line}), &hit)) {
             app_message(r->gc, r->app, "搜索", "已到末尾，未找到");
             return 0;
         }
-    } else if (!search_backward(r, query, &hit)) {
-        app_message(r->gc, r->app, "搜索", "已到开头，未找到");
-        return 0;
+    } else {
+        anchor = (reuse && r->hit_offset) ? r->hit_offset : r->top.byte_offset;
+        if (!search_backward(r, query, anchor, &hit)) {
+            app_message(r->gc, r->app, "搜索", "已到开头，未找到");
+            return 0;
+        }
     }
     r->hit_offset = hit.byte_offset;
     r->search_active = 1;
