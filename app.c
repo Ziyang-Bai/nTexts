@@ -658,21 +658,23 @@ static int do_search(Reader *r, int direction, int reuse) {
     TextPosition hit;
     uint16_t query[QUERY_LEN];
     uint32_t anchor;
+    int continuing;
     memcpy(query, r->last_query, sizeof(query));
     if (!reuse && !query_from_user(r, query)) return 0;
     memcpy(r->last_query, query, sizeof(r->last_query));
     storage_add_history(r->app, query);
     storage_save_app(r->app, r->data_dir);
+    continuing = reuse && r->hit_offset;
     if (direction >= 0) {
-        anchor = (reuse && r->hit_offset) ? r->hit_offset : r->top.byte_offset;
+        anchor = continuing ? r->hit_offset : r->top.byte_offset;
         if (!search_forward(r, query, next_char_offset(r, (TextPosition){anchor, r->top.source_line}), &hit)) {
-            app_message(r->gc, r->app, "搜索", "已到末尾，未找到");
+            app_message(r->gc, r->app, "搜索", continuing ? TXT_SEARCH_NO_NEXT : TXT_SEARCH_NOT_FOUND);
             return 0;
         }
     } else {
-        anchor = (reuse && r->hit_offset) ? r->hit_offset : r->top.byte_offset;
+        anchor = continuing ? r->hit_offset : r->top.byte_offset;
         if (!search_backward(r, query, anchor, &hit)) {
-            app_message(r->gc, r->app, "搜索", "已到开头，未找到");
+            app_message(r->gc, r->app, "搜索", continuing ? TXT_SEARCH_NO_PREV : TXT_SEARCH_NOT_FOUND);
             return 0;
         }
     }

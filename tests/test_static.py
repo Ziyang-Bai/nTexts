@@ -108,6 +108,18 @@ def test_tutorial_logs_steps_and_keys_for_serial_debugging():
     assert 'app_log("tutorial", "key step=%d got=%d ctrl=%d expect=%d need_ctrl=%d"' in tutorial
 
 
+def test_search_boundary_messages_distinguish_current_hit_from_no_match():
+    search = body_of("do_search")
+    assert "continuing = reuse && r->hit_offset;" in search
+    assert "continuing ? TXT_SEARCH_NO_NEXT : TXT_SEARCH_NOT_FOUND" in search
+    assert "continuing ? TXT_SEARCH_NO_PREV : TXT_SEARCH_NOT_FOUND" in search
+    assert "已到末尾，未找到" not in search
+    assert "已到开头，未找到" not in search
+    assert "TXT_SEARCH_NOT_FOUND" in STRINGS
+    assert "TXT_SEARCH_NO_NEXT" in STRINGS
+    assert "TXT_SEARCH_NO_PREV" in STRINGS
+
+
 def test_tutorial_strings_remain_available_for_messages():
     assert "TXT_TUTORIAL_RESET_DONE" in STRINGS
     assert "TXT_TUTORIAL_SKIP_DONE" in STRINGS
@@ -121,6 +133,7 @@ if __name__ == "__main__":
         test_interactive_tutorial_simulates_results_after_keys,
         test_tutorial_mock_reader_uses_wrapping_for_long_lines,
         test_tutorial_logs_steps_and_keys_for_serial_debugging,
+        test_search_boundary_messages_distinguish_current_hit_from_no_match,
         test_tutorial_strings_remain_available_for_messages,
     ]
     for test in tests:
