@@ -69,7 +69,14 @@ def test_interactive_tutorial_simulates_results_after_keys():
         "TUTORIAL_SCREEN_READER_TOP",
         "TUTORIAL_SCREEN_SEARCH_NEXT",
         "TUTORIAL_SCREEN_JUMP",
+        "TUTORIAL_SCREEN_JUMP_INPUT",
+        "TUTORIAL_SCREEN_JUMP_RESULT",
         "TUTORIAL_SCREEN_BOOKMARK",
+        "TUTORIAL_SCREEN_BOOKMARK_LIST",
+        "TUTORIAL_SCREEN_BOOKMARK_ACTION",
+        "TUTORIAL_SCREEN_BOOKMARK_JUMP",
+        "TUTORIAL_SCREEN_BOOKMARK_DELETE",
+        "TUTORIAL_SCREEN_FILE_INFO",
         "TUTORIAL_SCREEN_HOME_RECENT",
         "TUTORIAL_SCREEN_SETTINGS_FONT",
         "TUTORIAL_SCREEN_SETTINGS_THEME",
@@ -85,10 +92,20 @@ def test_tutorial_mock_reader_uses_wrapping_for_long_lines():
     assert 'draw_wrapped_text(gc, "按快捷键可以搜索、跳转、书签和打开菜单。"' in mock
     assert "这是第二页。刚才按右键以后，页面已经前进。" in mock
     assert "已在当前位置添加书签。" in mock
+    assert "书签已删除" in mock
+    assert "输入: 50" in mock
+    assert "文件信息" in mock
     assert "Ctrl+下 已经跳到结尾。" in mock
     assert "TXT_SEARCH_MODE_HINT" not in mock
     assert "教学中心" not in mock
     assert "跳过所有教学" not in mock
+    assert "Del删除" not in mock
+
+
+def test_tutorial_logs_steps_and_keys_for_serial_debugging():
+    tutorial = body_of("tutorial_center_page")
+    assert 'app_log("tutorial", "step %d/%d title=%s expect=%s ctrl=%d"' in tutorial
+    assert 'app_log("tutorial", "key step=%d got=%d ctrl=%d expect=%d need_ctrl=%d"' in tutorial
 
 
 def test_tutorial_strings_remain_available_for_messages():
@@ -103,6 +120,7 @@ if __name__ == "__main__":
         test_interactive_tutorial_requires_real_keys_and_keeps_skip_inside_tutorial,
         test_interactive_tutorial_simulates_results_after_keys,
         test_tutorial_mock_reader_uses_wrapping_for_long_lines,
+        test_tutorial_logs_steps_and_keys_for_serial_debugging,
         test_tutorial_strings_remain_available_for_messages,
     ]
     for test in tests:
