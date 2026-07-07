@@ -805,65 +805,106 @@ static void usage_page(Gc gc, AppState *app) {
 
 static void tutorial_center_page(Gc gc, AppState *app) {
     const Theme *t = &themes[app->theme];
-    const char *pages[][8] = {
+    const char *pages[][9] = {
         {
-            "教学中心 1/6: 文档传入",
-            "1. 将 nTexts.tns 传入计算器并运行",
-            "2. 文本文档建议命名为 book.txt.tns",
-            "3. 放入 Documents 或子文件夹",
-            "4. 支持 UTF-8 / GB18030",
-            "5. 首次打开会建立索引缓存",
+            "教学中心 1/10: 安装程序",
+            "将 nTexts.tns 传入计算器",
+            "在 Documents 中运行 nTexts",
+            "需要 Ndless 环境",
+            "首次启动会自动进入教学",
+            "设置里可重置或跳过教学",
             "右键下一页，左键上一页",
             NULL
         },
         {
-            "教学中心 2/6: 选择和浏览文档",
-            "主页按 0 或选中“0浏览文档”",
-            "上下移动，Enter 打开",
-            "进入文件夹后 Esc 返回上级",
-            "只显示目录、.txt、.txt.tns",
-            "打开成功后会进入阅读页",
-            "之后会出现在最近阅读",
+            "教学中心 2/10: 传入自己的文档",
+            "文本文件建议命名为 book.txt.tns",
+            "放入 Documents 或任意子文件夹",
+            "支持 .txt 和 .txt.tns",
+            "支持 UTF-8 / GB18030",
+            "大文件可以用，但首次打开会索引",
+            "不要删除 Documents/nTexts 数据目录",
             NULL
         },
         {
-            "教学中心 3/6: 阅读和最近阅读",
-            "左/右翻页，上/下按物理行移动",
+            "教学中心 3/10: 主页和最近阅读",
+            "主页显示最近阅读和两个入口",
+            "上下移动选中项目",
+            "Enter 打开选中项",
+            "0 可直接浏览 Documents",
+            "(-) 打开阅读设置",
+            "最近阅读会保存进度百分比",
+            NULL
+        },
+        {
+            "教学中心 4/10: 浏览文档",
+            "主页按 0 或选中浏览文档",
+            "只显示目录、.txt、.txt.tns",
+            "上下移动，Enter 打开",
+            "进入文件夹后 Esc 返回上级",
+            "在 Documents 根目录按 Esc 返回主页",
+            "打开文件后进入阅读页",
+            NULL
+        },
+        {
+            "教学中心 5/10: 加载文档",
+            "首次打开会识别编码",
+            "之后建立分页索引",
+            "索引进度页可按 Esc 取消",
+            "索引会缓存，下次打开更快",
+            "进度、书签、索引分开保存",
+            "文件变化后会自动重建状态",
+            NULL
+        },
+        {
+            "教学中心 6/10: 阅读操作",
+            "左/右翻页",
+            "上/下按原 TXT 物理行移动",
             "Ctrl+上 跳到开头",
             "Ctrl+下 跳到结尾",
             "Esc 返回书库",
-            "主页最近阅读可直接 Enter 打开",
-            "阅读进度会自动保存",
+            "阅读进度自动保存",
             NULL
         },
         {
-            "教学中心 4/6: 搜索和跳转",
+            "教学中心 7/10: 搜索",
             "F 输入搜索词并定位高亮",
             "命中后 Enter/下/F 找下一处",
-            "上 找上一处，Esc 退出搜索模式",
-            "G 打开跳转，可按百分比/页码/行号",
-            "Menu 里也有搜索和跳转",
-            "搜索词会保存到历史",
+            "上 找上一处",
+            "Esc 退出搜索模式",
+            "菜单也可向后/向前查找",
+            "搜索历史会保存最近词",
             NULL
         },
         {
-            "教学中心 5/6: 功能菜单",
+            "教学中心 8/10: 跳转和书签",
+            "G 打开跳转",
+            "可按百分比、页码、物理行号跳转",
+            "B 直接添加书签",
+            "Menu -> 管理书签 可跳转或删除",
+            "书签会随当前文件保存",
+            "文件变化后保留可用书签",
+            NULL
+        },
+        {
+            "教学中心 9/10: 功能菜单",
             "Menu 打开功能菜单",
-            "添加书签、管理书签、搜索",
-            "向后查找、向前查找、跳转",
-            "阅读设置、文件信息、返回书库",
-            "列表中可按数字键快速选择",
-            "B 可直接添加书签",
+            "1 添加书签，2 管理书签",
+            "3 搜索，4 向后查找，5 向前查找",
+            "6 跳转，7 阅读设置",
+            "8 文件信息，9 返回书库",
+            "列表中可按数字键直接选择",
             NULL
         },
         {
-            "教学中心 6/6: 阅读设置",
-            "主页按 (-) 或进入阅读设置",
+            "教学中心 10/10: 设置和教学",
+            "主页按 (-) 或阅读菜单进设置",
             "字号: 小/中/大",
             "主题: 浅色/深色/护眼",
             "边距: 窄/宽",
             "设置变化会重建当前书索引",
-            "本页也可重置或跳过教学",
+            "教学中心可随时复习",
+            "可重置教学或跳过所有教学",
             NULL
         }
     };
@@ -874,8 +915,8 @@ static void tutorial_center_page(Gc gc, AppState *app) {
         set_color(gc, t->bg);
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
         draw_text(gc, pages[page][0], 8, 8, Bold10, t->fg);
-        for (int i = 1; i < 7 && pages[page][i]; ++i)
-            draw_text(gc, pages[page][i], 10, 30 + (i - 1) * 24, Regular9, t->fg);
+        for (int i = 1; i < 8 && pages[page][i]; ++i)
+            draw_text(gc, pages[page][i], 10, 30 + (i - 1) * 22, Regular9, t->fg);
         draw_text(gc, "左右翻页  Esc/Enter返回", 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         blit_gc(gc);
@@ -1280,6 +1321,7 @@ static void run_tutorial_if_needed(Gc gc, AppState *app, const char *data_dir) {
     if (app->tutorial_flags & TUTORIAL_ALL_SKIPPED) return;
     if (app->tutorial_flags & TUTORIAL_READER_SEEN) return;
     app_log("tutorial", "start");
+    tutorial_center_page(gc, app);
     if (!create_tutorial_demo(data_dir, path, sizeof(path))) {
         app_log("tutorial", "create demo failed");
         return;
