@@ -33,6 +33,7 @@ typedef struct {
 typedef struct {
     uint32_t magic, version;
     int font_choice, theme, margin_choice;
+    uint32_t tutorial_flags;
     uint32_t recent_count;
     RecentBook recents[MAX_RECENTS];
     uint32_t history_count;
@@ -49,7 +50,10 @@ void storage_book_defaults(BookState *state, TextFile *text);
 int storage_load_book(BookState *state, TextFile *text, const char *directory);
 int storage_save_book(const BookState *state, const char *directory);
 void storage_touch_recent(AppState *state, const BookState *book);
+int storage_remove_recent(AppState *state, const char *path);
 int storage_prune_recents(AppState *state);
 void storage_add_history(AppState *state, const uint16_t *query);
+
+#define TUTORIAL_READER_SEEN 0x00000001u
 
 #endif

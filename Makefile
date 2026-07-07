@@ -5,7 +5,7 @@ LD = nspire-ld
 GENZEHN = genzehn
 
 GCCFLAGS = -Wall -Wextra -marm -std=c99
-LDFLAGS = -Wl,--gc-sections
+LDFLAGS = -Wl,--nspireio,--gc-sections
 ZEHNFLAGS = --name "nTexts" --240x320-support true --uses-lcd-blit true
 
 ifeq ($(DEBUG),TRUE)
@@ -15,7 +15,7 @@ GCCFLAGS += -Os
 endif
 
 EXE = nTexts
-OBJS = main.o text_engine.o reader_index.o storage.o
+OBJS = main.o app.o app_language.o app_log.o text_engine.o reader_index.o storage.o
 
 all: $(EXE).tns
 

@@ -1,4 +1,5 @@
 #include "text_engine.h"
+#include "app_log.h"
 #include "gb18030_table.h"
 #include <string.h>
 
@@ -52,9 +53,16 @@ int text_open(TextFile *text, const char *path) {
     struct stat st;
     unsigned char bom[3] = {0};
     memset(text, 0, sizeof(*text));
-    if (stat(path, &st)) return 0;
+    app_log("text", "open begin %s", path ? path : "(null)");
+    if (stat(path, &st)) {
+        app_log("text", "stat failed %s", path ? path : "(null)");
+        return 0;
+    }
     text->fp = fopen(path, "rb");
-    if (!text->fp) return 0;
+    if (!text->fp) {
+        app_log("text", "fopen failed %s", path ? path : "(null)");
+        return 0;
+    }
     strncpy(text->path, path, sizeof(text->path) - 1);
     text->size = (uint32_t)st.st_size;
     text->mtime = (uint32_t)st.st_mtime;
@@ -65,6 +73,9 @@ int text_open(TextFile *text, const char *path) {
         text->data_start = 0;
         text->encoding = text_utf8_valid_sample(text->fp, 0, 65536) ? TEXT_UTF8 : TEXT_GB18030;
     }
+    app_log("text", "open ok size=%lu encoding=%s data_start=%lu",
+            (unsigned long)text->size, text_encoding_name(text->encoding),
+            (unsigned long)text->data_start);
     return 1;
 }
 

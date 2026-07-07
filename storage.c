@@ -1,4 +1,5 @@
 #include "storage.h"
+#include "app_log.h"
 #include <libndls.h>
 #include <errno.h>
 #include <stdio.h>
@@ -7,7 +8,7 @@
 
 #define APP_MAGIC 0x5053544eu
 #define BOOK_MAGIC 0x4b42544eu
-#define STATE_VERSION 2u
+#define STATE_VERSION 3u
 
 uint32_t storage_hash_path(const char *path) {
     uint32_t h = 2166136261u;
@@ -30,6 +31,7 @@ int storage_init(char *directory, size_t capacity) {
     struct stat st;
     const char *documents = get_documents_dir();
     int mkdir_errno;
+    app_log("storage", "init documents=%s", documents ? documents : "(null)");
     if (!documents || !*documents) {
         errno = ENOENT;
         if (capacity) directory[0] = 0;
@@ -37,11 +39,15 @@ int storage_init(char *directory, size_t capacity) {
     }
     storage_join_path(directory, capacity, documents, "nTexts");
     errno = 0;
-    if (mkdir(directory, 0777) == 0) return 1;
+    if (mkdir(directory, 0777) == 0) {
+        app_log("storage", "created %s", directory);
+        return 1;
+    }
     mkdir_errno = errno;
     errno = 0;
     if (stat(directory, &st) == 0 && S_ISDIR(st.st_mode)) {
         errno = 0;
+        app_log("storage", "using existing %s", directory);
         return 1;
     }
     errno = mkdir_errno ? mkdir_errno : (errno ? errno : ENOTDIR);
@@ -72,18 +78,24 @@ void storage_app_defaults(AppState *state) {
 int storage_load_app(AppState *state, const char *directory) {
     char path[600]; FILE *fp;
     snprintf(path, sizeof(path), "%s/app.state", directory);
+    app_log("storage", "load app %s", path);
     fp = fopen(path, "rb");
     if (!fp || fread(state, sizeof(*state), 1, fp) != 1 || state->magic != APP_MAGIC ||
         state->version != STATE_VERSION || state->recent_count > MAX_RECENTS || state->history_count > MAX_HISTORY) {
         if (fp) fclose(fp);
         storage_app_defaults(state);
+        app_log("storage", "app defaults");
         return 0;
     }
-    fclose(fp); return 1;
+    fclose(fp);
+    app_log("storage", "app ok recents=%lu history=%lu",
+            (unsigned long)state->recent_count, (unsigned long)state->history_count);
+    return 1;
 }
 
 int storage_save_app(const AppState *state, const char *directory) {
     char path[600]; snprintf(path, sizeof(path), "%s/app.state", directory);
+    app_log("storage", "save app recents=%lu", (unsigned long)state->recent_count);
     return atomic_write(path, state, sizeof(*state));
 }
 
@@ -99,6 +111,7 @@ int storage_load_book(BookState *state, TextFile *text, const char *directory) {
     Bookmark kept[MAX_BOOKMARKS];
     uint32_t kept_count = 0, i;
     storage_book_path(path, sizeof(path), directory, text->path, "state");
+    app_log("storage", "load book state %s", path);
     fp = fopen(path, "rb");
     if (!fp || fread(state, sizeof(*state), 1, fp) != 1 || state->magic != BOOK_MAGIC ||
         state->version != STATE_VERSION || strcmp(state->path, text->path) || state->bookmark_count > MAX_BOOKMARKS) {
@@ -128,6 +141,8 @@ int storage_load_book(BookState *state, TextFile *text, const char *directory) {
 
 int storage_save_book(const BookState *state, const char *directory) {
     char path[600]; storage_book_path(path, sizeof(path), directory, state->path, "state");
+    app_log("storage", "save book offset=%lu path=%s",
+            (unsigned long)state->progress.byte_offset, state->path);
     return atomic_write(path, state, sizeof(*state));
 }
 
@@ -141,6 +156,30 @@ void storage_touch_recent(AppState *state, const BookState *book) {
     strncpy(state->recents[0].path, book->path, sizeof(state->recents[0].path) - 1);
     state->recents[0].offset = book->progress.byte_offset; state->recents[0].file_size = book->file_size;
     if (state->recent_count < MAX_RECENTS) state->recent_count++;
+    app_log("storage", "touch recent count=%lu path=%s",
+            (unsigned long)state->recent_count, book->path);
+}
+
+int storage_remove_recent(AppState *state, const char *path) {
+    uint32_t write = 0;
+    uint32_t kept;
+    int changed = 0;
+    if (!path || !*path) return 0;
+    for (uint32_t read = 0; read < state->recent_count && read < MAX_RECENTS; ++read) {
+        if (!strcmp(state->recents[read].path, path)) {
+            changed = 1;
+            continue;
+        }
+        if (write != read) state->recents[write] = state->recents[read];
+        write++;
+    }
+    kept = write;
+    while (write < MAX_RECENTS) memset(&state->recents[write++], 0, sizeof(state->recents[0]));
+    if (changed) {
+        state->recent_count = kept <= MAX_RECENTS ? kept : MAX_RECENTS;
+        app_log("storage", "removed recent path=%s", path);
+    }
+    return changed;
 }
 
 int storage_prune_recents(AppState *state) {

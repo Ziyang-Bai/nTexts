@@ -1,4 +1,5 @@
 #include "reader_index.h"
+#include "app_log.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -51,6 +52,8 @@ int index_build(PageIndex *index, TextFile *text, Gc gc, Layout layout,
     uint16_t ch;
     uint32_t off, visual_line = 0, last_report = 0;
     int width = 0, max_width = 320 - layout.margin * 2;
+    app_log("index", "build begin size=%lu font=%d margin=%d lpp=%d",
+            (unsigned long)text->size, layout.font_size, layout.margin, layout.lines_per_page);
     index_free(index);
     index->layout = layout; index->file_size = text->size;
     index->file_mtime = text->mtime; index->encoding = text->encoding;
@@ -91,6 +94,9 @@ int index_build(PageIndex *index, TextFile *text, Gc gc, Layout layout,
     }
     index->total_source_lines = d.line;
     if (progress) progress(text->size, text->size, context);
+    app_log("index", "build ok pages=%lu lines=%lu source_lines=%lu",
+            (unsigned long)index->page_count, (unsigned long)index->line_count,
+            (unsigned long)index->total_source_lines);
     return 1;
 }
 
@@ -121,12 +127,18 @@ int index_save(const PageIndex *index, const char *path) {
 int index_load(PageIndex *index, TextFile *text, Layout layout, const char *path) {
     FILE *fp = fopen(path, "rb");
     IndexHeader h;
-    if (!fp) return 0;
+    app_log("index", "load %s", path ? path : "(null)");
+    if (!fp) {
+        app_log("index", "cache miss");
+        return 0;
+    }
     if (fread(&h, sizeof(h), 1, fp) != 1 || h.magic != INDEX_MAGIC || h.version != INDEX_VERSION ||
         h.file_size != text->size || h.file_mtime != text->mtime || h.encoding != (uint32_t)text->encoding ||
         !same_layout((Layout){h.font_size,h.margin,h.lines_per_page,h.line_height}, layout) ||
         !h.page_count || h.page_count > 1000000 || h.line_count > 1000000) {
-        fclose(fp); return 0;
+        fclose(fp);
+        app_log("index", "cache invalid");
+        return 0;
     }
     index_free(index);
     index->pages = malloc(h.page_count * sizeof(*index->pages));
@@ -142,6 +154,8 @@ int index_load(PageIndex *index, TextFile *text, Layout layout, const char *path
     index->total_source_lines = h.total_source_lines;
     index->file_size = h.file_size; index->file_mtime = h.file_mtime;
     index->encoding = (TextEncoding)h.encoding; index->layout = layout;
+    app_log("index", "cache ok pages=%lu lines=%lu",
+            (unsigned long)index->page_count, (unsigned long)index->line_count);
     return 1;
 }
 
