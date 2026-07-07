@@ -847,7 +847,7 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
             gui_gc_fillRect(gc, 4, 52, SCREEN_W - 8, 20);
         }
         draw_text(gc, "tutorial_demo.txt.tns", 10, 54, Regular10, t->fg);
-        draw_text(gc, "my_book.txt.tns", 10, 76, Regular10, t->fg);
+        draw_text(gc, "notes.txt.tns", 10, 76, Regular10, t->fg);
         draw_text(gc, TXT_FOOTER_BROWSER, 8, FOOTER_Y, Regular9, t->muted);
     } else if (screen == TUTORIAL_SCREEN_LOADING) {
         draw_text(gc, "正在加载 tutorial_demo.txt.tns", 34, 84, Regular10, t->fg);
@@ -882,14 +882,14 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
             draw_wrapped_text(gc, "已在当前位置添加书签。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
             draw_wrapped_text(gc, "以后可在 Menu 的管理书签里返回这里。", 10, 86, SCREEN_W - 20, Regular10, t->fg);
         } else if (screen == TUTORIAL_SCREEN_SEARCH || screen == TUTORIAL_SCREEN_SEARCH_NEXT) {
-            const char *hit = screen == TUTORIAL_SCREEN_SEARCH ? "搜索命中的这一行会保持高亮。" : "这是下一处搜索命中，位置已经更新。";
+            const char *hit = screen == TUTORIAL_SCREEN_SEARCH ? "找到的内容会这样标出来。" : "这里是下一处结果，页面已经跟着跳过去了。";
             page = screen == TUTORIAL_SCREEN_SEARCH ? "3/8页  搜索中" : "5/8页  搜索中";
-            draw_wrapped_text(gc, "搜索会先定位到命中的页面。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
+            draw_wrapped_text(gc, "输入要找的词，nTexts 会跳到第一个结果。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
             set_color(gc, t->highlight_bg);
             gui_gc_fillRect(gc, 8, 66, SCREEN_W - 16, 22);
             draw_text(gc, hit, 10, 68, Regular10, t->highlight_fg);
-            draw_text(gc, "搜索: Enter/下 下一处", 6, SCREEN_H - 28, Regular9, t->muted);
-            draw_text(gc, "上 上一处  Esc退出", 6, SCREEN_H - 14, Regular9, t->muted);
+            draw_text(gc, "Enter/下 找下一处", 6, SCREEN_H - 28, Regular9, t->muted);
+            draw_text(gc, "上 找上一处  Esc退出", 6, SCREEN_H - 14, Regular9, t->muted);
         } else {
             draw_wrapped_text(gc, "按快捷键可以搜索、跳转、书签和打开菜单。", 10, 68,
                               SCREEN_W - 20, Regular10, t->fg);
@@ -914,27 +914,27 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
     } else {
         draw_text(gc, "传入自己的文档", 8, 8, Bold12, t->fg);
         draw_text(gc, "1. 将 nTexts.tns 传入计算器", 10, 42, Regular9, t->fg);
-        draw_text(gc, "2. 文本文档命名为 book.txt.tns", 10, 66, Regular9, t->fg);
-        draw_text(gc, "3. 放入 Documents 或子文件夹", 10, 90, Regular9, t->fg);
-        draw_text(gc, "4. 在 nTexts 中浏览并打开", 10, 114, Regular9, t->fg);
+        draw_text(gc, "2. 把你的文本放入 Documents", 10, 66, Regular9, t->fg);
+        draw_text(gc, "3. 也可以放进子文件夹整理", 10, 90, Regular9, t->fg);
+        draw_text(gc, "4. 回到 nTexts 浏览并打开", 10, 114, Regular9, t->fg);
     }
 }
 
 static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
     const Theme *t = &themes[app->theme];
     const TutorialStep steps[] = {
-        {TUTORIAL_SCREEN_TRANSFER, "安装和传书", "先学如何把程序和自己的书放进计算器。", "文本文档建议命名为 book.txt.tns。", "现在按 Enter 继续。", 5, 0, 8, 34, 304, 104},
+        {TUTORIAL_SCREEN_TRANSFER, "安装和传书", "先把 nTexts.tns 传进计算器。", "再把想看的文本放进 Documents。", "现在按 Enter 继续。", 5, 0, 8, 34, 304, 104},
         {TUTORIAL_SCREEN_HOME, "主页", "这里显示最近阅读、浏览文档和设置。", "按 0 直接进入 Documents 浏览器。", "请按 0。", 12, 0, 6, 92, 180, 22},
         {TUTORIAL_SCREEN_BROWSER, "浏览文档", "浏览器只显示目录、.txt 和 .txt.tns。", "上下移动光标。", "请按下键选择文件。", 2, 0, 6, 50, 220, 24},
         {TUTORIAL_SCREEN_BROWSER_SELECTED, "进入或打开", "选中文件夹时 Enter 进入。", "选中文本文件时 Enter 打开。", "请按 Enter 打开演示文档。", 5, 0, 6, 50, 220, 24},
         {TUTORIAL_SCREEN_LOADING, "加载和索引", "首次打开会识别编码并建立分页索引。", "索引会缓存，下次打开会更快。", "请按 Enter 继续。", 5, 0, 42, 96, 236, 36},
         {TUTORIAL_SCREEN_READER, "阅读正文", "这是阅读区。", "左右翻页，上下按原文本物理行移动。", "请按右键翻到下一页。", 4, 0, 6, 8, 308, 176},
-        {TUTORIAL_SCREEN_READER_PAGE2, "返回上一页", "刚才已经进入第二页。", "左键会回到上一页，进度会自动保存。", "请按左键。", 3, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_READER_PAGE2, "返回上一页", "左键会回到上一页。", "阅读进度将会保存，重新进入将会自动续读。", "请按左键。", 3, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_READER, "快捷跳到开头", "先回到了第一页。", "Ctrl+上 会跳到整本书开头。", "请按 Ctrl+上。", 1, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_READER_TOP, "快捷跳到结尾", "现在已经在开头。", "Ctrl+下 会跳到整本书结尾。", "请按 Ctrl+下。", 2, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER_END, "搜索快捷键", "已经跳到结尾。", "F 打开搜索，命中后会自动定位并高亮。", "请按 F。", 9, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_SEARCH, "继续搜索", "高亮后 Enter、下键、F 都找下一处。", "上键找上一处，Esc 退出搜索模式。", "请按 Enter 找下一处。", 5, 0, 6, 62, 308, 30},
-        {TUTORIAL_SCREEN_SEARCH_NEXT, "向前搜索", "已经定位到下一处。", "搜索模式里上键找上一处。", "请按上键。", 1, 0, 6, 62, 308, 30},
+        {TUTORIAL_SCREEN_READER_END, "搜索快捷键", "已经跳到结尾。", "按 F 搜索文字，找到后会直接跳过去并标出来。", "请按 F。", 9, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_SEARCH, "继续找下一个", "现在已经找到一处。", "按 Enter 或下键继续找下一个，上键回到上一个。", "请按 Enter 找下一处。", 5, 0, 6, 62, 308, 30},
+        {TUTORIAL_SCREEN_SEARCH_NEXT, "回到上一个结果", "页面已经跳到下一处结果。", "如果跳过头了，按上键回到上一处。", "请按上键。", 1, 0, 6, 62, 308, 30},
         {TUTORIAL_SCREEN_READER, "跳转快捷键", "G 打开跳转。", "可以按百分比、页码或物理行号跳转。", "请按 G。", 10, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_JUMP, "跳转菜单", "这里选择跳转方式。", "实际使用时输入数值后会立刻定位。", "请按 Enter 回到阅读。", 5, 0, 6, 32, 130, 104},
         {TUTORIAL_SCREEN_READER, "书签快捷键", "B 可以直接添加书签。", "Menu 里可以管理书签。", "请按 B。", 8, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
@@ -942,8 +942,8 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
         {TUTORIAL_SCREEN_READER, "打开功能菜单", "Menu 打开完整功能菜单。", "下面会逐项练习菜单。", "请按 Menu。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_MENU, "菜单 1: 添加书签", "添加当前位置书签。", "也可以直接按 B。", "请按 1。", 21, 0, 6, 28, 170, 20},
         {TUTORIAL_SCREEN_MENU, "菜单 2: 管理书签", "查看、跳转或删除已有书签。", "书签保存在当前书状态中。", "请按 2。", 22, 0, 6, 47, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 3: 搜索", "输入搜索词并定位第一个命中。", "搜索结果会高亮。", "请按 3。", 23, 0, 6, 66, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 4/5: 继续查找", "4 向后查找，5 向前查找。", "用于复用上一次搜索词。", "请按 4。", 24, 0, 6, 85, 190, 40},
+        {TUTORIAL_SCREEN_MENU, "菜单 3: 搜索", "输入想找的字词。", "找到后会跳到对应位置并标出来。", "请按 3。", 23, 0, 6, 66, 170, 20},
+        {TUTORIAL_SCREEN_MENU, "菜单 4/5: 继续查找", "4 继续找下一个，5 回到上一个。", "会沿用刚才输入的搜索词。", "请按 4。", 24, 0, 6, 85, 190, 40},
         {TUTORIAL_SCREEN_MENU, "菜单 6: 跳转", "按百分比、页码或物理行号跳转。", "也可以直接按 G。", "请按 6。", 26, 0, 6, 123, 170, 20},
         {TUTORIAL_SCREEN_MENU, "菜单 7: 阅读设置", "调整字号、主题和边距。", "设置变化会重建当前书索引。", "请按 7。", 27, 0, 6, 142, 170, 20},
         {TUTORIAL_SCREEN_MENU, "菜单 8/9: 信息和返回", "8 查看文件信息，9 返回书库。", "返回书库也可以按 Esc。", "请按 8。", 28, 0, 6, 161, 190, 40},

@@ -16,7 +16,7 @@
 #define TXT_DIGITS_DIRECT "1-9直达"
 #define TXT_SETTINGS_DIGITS_DIRECT "1-5直达"
 #define TXT_LEFT_RIGHT_ENTER_SWITCH "左右/Enter切换"
-#define TXT_SEARCH_MODE_HINT "搜索: Enter/下 下一处  上 上一处  Esc退出"
+#define TXT_SEARCH_MODE_HINT "搜索中: Enter/下 找下一处  上 找上一处  Esc退出"
 #define TXT_TUTORIAL_DONE "教学进度"
 #define TXT_TUTORIAL_RESET_DONE "已重置教学进度，下次启动会重新显示"
 #define TXT_TUTORIAL_SKIP_DONE "已跳过所有教学，可在设置中重置"
