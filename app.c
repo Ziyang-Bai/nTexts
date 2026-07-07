@@ -803,12 +803,96 @@ static void usage_page(Gc gc, AppState *app) {
     }
 }
 
+static void tutorial_center_page(Gc gc, AppState *app) {
+    const Theme *t = &themes[app->theme];
+    const char *pages[][8] = {
+        {
+            "教学中心 1/6: 文档传入",
+            "1. 将 nTexts.tns 传入计算器并运行",
+            "2. 文本文档建议命名为 book.txt.tns",
+            "3. 放入 Documents 或子文件夹",
+            "4. 支持 UTF-8 / GB18030",
+            "5. 首次打开会建立索引缓存",
+            "右键下一页，左键上一页",
+            NULL
+        },
+        {
+            "教学中心 2/6: 选择和浏览文档",
+            "主页按 0 或选中“0浏览文档”",
+            "上下移动，Enter 打开",
+            "进入文件夹后 Esc 返回上级",
+            "只显示目录、.txt、.txt.tns",
+            "打开成功后会进入阅读页",
+            "之后会出现在最近阅读",
+            NULL
+        },
+        {
+            "教学中心 3/6: 阅读和最近阅读",
+            "左/右翻页，上/下按物理行移动",
+            "Ctrl+上 跳到开头",
+            "Ctrl+下 跳到结尾",
+            "Esc 返回书库",
+            "主页最近阅读可直接 Enter 打开",
+            "阅读进度会自动保存",
+            NULL
+        },
+        {
+            "教学中心 4/6: 搜索和跳转",
+            "F 输入搜索词并定位高亮",
+            "命中后 Enter/下/F 找下一处",
+            "上 找上一处，Esc 退出搜索模式",
+            "G 打开跳转，可按百分比/页码/行号",
+            "Menu 里也有搜索和跳转",
+            "搜索词会保存到历史",
+            NULL
+        },
+        {
+            "教学中心 5/6: 功能菜单",
+            "Menu 打开功能菜单",
+            "添加书签、管理书签、搜索",
+            "向后查找、向前查找、跳转",
+            "阅读设置、文件信息、返回书库",
+            "列表中可按数字键快速选择",
+            "B 可直接添加书签",
+            NULL
+        },
+        {
+            "教学中心 6/6: 阅读设置",
+            "主页按 (-) 或进入阅读设置",
+            "字号: 小/中/大",
+            "主题: 浅色/深色/护眼",
+            "边距: 窄/宽",
+            "设置变化会重建当前书索引",
+            "本页也可重置或跳过教学",
+            NULL
+        }
+    };
+    int page = 0, count = (int)(sizeof(pages) / sizeof(pages[0]));
+    for (;;) {
+        int key;
+        gui_gc_begin(gc);
+        set_color(gc, t->bg);
+        gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
+        draw_text(gc, pages[page][0], 8, 8, Bold10, t->fg);
+        for (int i = 1; i < 7 && pages[page][i]; ++i)
+            draw_text(gc, pages[page][i], 10, 30 + (i - 1) * 24, Regular9, t->fg);
+        draw_text(gc, "左右翻页  Esc/Enter返回", 8, FOOTER_Y, Regular9, t->muted);
+        gui_gc_finish(gc);
+        blit_gc(gc);
+        key = wait_key();
+        wait_release();
+        if (key == 4 && page + 1 < count) page++;
+        else if (key == 3 && page > 0) page--;
+        else if (key == 5 || key == 6) return;
+    }
+}
+
 static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) {
     const Theme *t;
     const char *font_labels[] = {"小", "中", "大"};
     const char *theme_labels[] = {"浅色", "深色", "护眼"};
     const char *margin_labels[] = {"窄", "宽"};
-    char items[5][72];
+    char items[8][72];
     int sel = 0;
     for (;;) {
         int key;
@@ -821,37 +905,70 @@ static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) 
                  margin_labels[0], margin_labels[1], margin_labels[app->margin_choice ? 1 : 0]);
         snprintf(items[3], sizeof(items[3]), "4. 关于");
         snprintf(items[4], sizeof(items[4]), "5. 使用说明");
+        snprintf(items[5], sizeof(items[5]), "6. 教学中心");
+        snprintf(items[6], sizeof(items[6]), "7. 重置教学进度");
+        snprintf(items[7], sizeof(items[7]), "8. 跳过所有教学");
         gui_gc_begin(gc);
         set_color(gc, t->bg);
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
         draw_text(gc, "阅读设置", 8, 6, Bold12, t->fg);
-        for (int i = 0; i < 5; ++i) {
-            int y = 34 + i * 27;
+        for (int i = 0; i < 8; ++i) {
+            int y = 32 + i * 22;
             if (i == sel) {
                 set_color(gc, t->highlight_bg);
-                gui_gc_fillRect(gc, 4, y - 2, SCREEN_W - 8, 24);
+                gui_gc_fillRect(gc, 4, y - 2, SCREEN_W - 8, 20);
             }
             draw_text(gc, items[i], 10, y, Regular10, i == sel ? t->highlight_fg : t->fg);
         }
-        draw_text(gc, TXT_FOOTER_SETTINGS, 8, FOOTER_Y, Regular9, t->muted);
+        draw_text(gc, "1-8直达  左右/Enter执行  Esc返回", 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         blit_gc(gc);
         key = wait_key(); wait_release();
-        if (key == 1) sel = sel > 0 ? sel - 1 : 4;
-        else if (key == 2) sel = sel < 4 ? sel + 1 : 0;
-        else if (key >= 21 && key <= 25) {
+        if (key == 1) sel = sel > 0 ? sel - 1 : 7;
+        else if (key == 2) sel = sel < 7 ? sel + 1 : 0;
+        else if (key >= 21 && key <= 28) {
             sel = key - 21;
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
+            else if (sel == 5) tutorial_center_page(gc, app);
+            else if (sel == 6) {
+                app->tutorial_flags = 0;
+                storage_save_app(app, data_dir);
+                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_RESET_DONE);
+            } else if (sel == 7) {
+                app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
+                storage_save_app(app, data_dir);
+                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
+            }
             else if (apply_setting_change(r, app, data_dir, sel, 1) < 0) return -1;
         }
         else if (key == 3) {
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
+            else if (sel == 5) tutorial_center_page(gc, app);
+            else if (sel == 6) {
+                app->tutorial_flags = 0;
+                storage_save_app(app, data_dir);
+                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_RESET_DONE);
+            } else if (sel == 7) {
+                app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
+                storage_save_app(app, data_dir);
+                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
+            }
             else if (apply_setting_change(r, app, data_dir, sel, -1) < 0) return -1;
         } else if (key == 4 || key == 5) {
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
+            else if (sel == 5) tutorial_center_page(gc, app);
+            else if (sel == 6) {
+                app->tutorial_flags = 0;
+                storage_save_app(app, data_dir);
+                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_RESET_DONE);
+            } else if (sel == 7) {
+                app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
+                storage_save_app(app, data_dir);
+                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
+            }
             else if (apply_setting_change(r, app, data_dir, sel, 1) < 0) return -1;
         } else if (key == 6) {
             return 0;
@@ -1160,6 +1277,7 @@ static void cleanup_tutorial_demo(AppState *app, const char *data_dir, const cha
 
 static void run_tutorial_if_needed(Gc gc, AppState *app, const char *data_dir) {
     char path[600];
+    if (app->tutorial_flags & TUTORIAL_ALL_SKIPPED) return;
     if (app->tutorial_flags & TUTORIAL_READER_SEEN) return;
     app_log("tutorial", "start");
     if (!create_tutorial_demo(data_dir, path, sizeof(path))) {

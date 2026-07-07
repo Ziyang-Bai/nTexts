@@ -25,6 +25,9 @@
 #define TXT_TUTORIAL_STEP3_HINT "按 Enter 自动搜索“高亮”"
 #define TXT_TUTORIAL_STEP4_TITLE "教学 4/4: 搜索结果会保持高亮"
 #define TXT_TUTORIAL_STEP4_HINT "Enter/下继续查找，上向前，Esc结束"
+#define TXT_TUTORIAL_DONE "教学进度"
+#define TXT_TUTORIAL_RESET_DONE "已重置教学进度，下次启动会重新显示"
+#define TXT_TUTORIAL_SKIP_DONE "已跳过所有教学，可在设置中重置"
 
 #define TXT_FOOTER_HOME TXT_ENTER_OPEN "  " TXT_BROWSE_DOCS "  " TXT_SETTINGS "  " TXT_ESC_EXIT
 #define TXT_FOOTER_BROWSER TXT_ENTER_OPEN "  " TXT_ESC_UP_OR_BACK

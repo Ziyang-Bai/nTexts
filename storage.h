@@ -55,5 +55,6 @@ int storage_prune_recents(AppState *state);
 void storage_add_history(AppState *state, const uint16_t *query);
 
 #define TUTORIAL_READER_SEEN 0x00000001u
+#define TUTORIAL_ALL_SKIPPED 0x80000000u
 
 #endif
