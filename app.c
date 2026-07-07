@@ -951,14 +951,14 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
         tutorial_mock_screen(gc, t, step->screen);
         fill_dim_outside(gc, step->x, step->y, step->w, step->h);
         set_color(gc, t->bg);
-        gui_gc_fillRect(gc, 8, 150, SCREEN_W - 16, 64);
-        draw_text(gc, step->title, 14, 160, Bold10, t->fg);
-        draw_text(gc, step->body1, 14, 178, Regular9, t->fg);
-        draw_text(gc, step->body2, 14, 194, Regular9, t->fg);
-        draw_text(gc, step->body3, 14, 208, Regular9, t->muted);
-        snprintf(footer, sizeof(footer), "%d/%d  按 %s 继续  0跳过所有教学",
+        gui_gc_fillRect(gc, 8, 132, SCREEN_W - 16, 82);
+        draw_text(gc, step->title, 14, 140, Bold10, t->fg);
+        draw_text(gc, step->body1, 14, 158, Regular9, t->fg);
+        draw_text(gc, step->body2, 14, 174, Regular9, t->fg);
+        draw_text(gc, step->body3, 14, 190, Regular9, t->muted);
+        snprintf(footer, sizeof(footer), "%d/%d  按%s继续  0跳过",
                  i + 1, count, tutorial_key_label(step));
-        draw_text(gc, footer, 8, FOOTER_Y, Regular9, t->muted);
+        draw_text(gc, footer, 14, 206, Regular9, t->muted);
         gui_gc_finish(gc);
         blit_gc(gc);
 
