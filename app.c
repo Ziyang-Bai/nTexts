@@ -949,19 +949,20 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
     for (int i = 0; i < count;) {
         int key, ctrl;
         char footer[96];
+        int panel_y;
         const TutorialStep *step = &steps[i];
+        panel_y = step->y > 118 ? 18 : 136;
         gui_gc_begin(gc);
         tutorial_mock_screen(gc, t, step->screen);
         fill_dim_outside(gc, step->x, step->y, step->w, step->h);
         set_color(gc, t->bg);
-        gui_gc_fillRect(gc, 8, 132, SCREEN_W - 16, 82);
-        draw_text(gc, step->title, 14, 140, Bold10, t->fg);
-        draw_text(gc, step->body1, 14, 158, Regular9, t->fg);
-        draw_text(gc, step->body2, 14, 174, Regular9, t->fg);
-        draw_text(gc, step->body3, 14, 190, Regular9, t->muted);
+        gui_gc_fillRect(gc, 8, panel_y, SCREEN_W - 16, 76);
+        draw_text(gc, step->title, 14, panel_y + 6, Bold10, t->fg);
+        draw_text(gc, step->body1, 14, panel_y + 24, Regular9, t->fg);
+        draw_text(gc, step->body2, 14, panel_y + 42, Regular9, t->fg);
         snprintf(footer, sizeof(footer), "%d/%d  按%s继续  0跳过",
                  i + 1, count, tutorial_key_label(step));
-        draw_text(gc, footer, 14, 206, Regular9, t->muted);
+        draw_text(gc, footer, 14, panel_y + 60, Regular9, t->muted);
         gui_gc_finish(gc);
         blit_gc(gc);
 

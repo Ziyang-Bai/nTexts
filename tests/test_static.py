@@ -50,10 +50,12 @@ def test_reader_tutorial_overlay_stays_above_footer():
 def test_interactive_tutorial_requires_real_keys_and_keeps_skip_inside_tutorial():
     tutorial = body_of("tutorial_center_page")
     assert "TutorialStep steps[]" in tutorial
+    assert "panel_y = step->y > 118 ? 18 : 136;" in tutorial
     assert "按%s继续" in tutorial
     assert "key == step->key" in tutorial
     assert "0跳过" in tutorial
     assert "FOOTER_Y" not in tutorial
+    assert "step->body3" not in tutorial
     assert "TUTORIAL_ALL_SKIPPED" in tutorial
 
 
