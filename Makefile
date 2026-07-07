@@ -33,4 +33,7 @@ $(EXE).tns: $(EXE).elf
 clean:
 	rm -f $(OBJS) $(EXE).elf $(EXE).tns $(EXE).tns.zehn
 
-.PHONY: all clean
+test:
+	python3 tests/test_static.py
+
+.PHONY: all clean test
