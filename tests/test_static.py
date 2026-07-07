@@ -95,6 +95,8 @@ def test_tutorial_mock_reader_uses_wrapping_for_long_lines():
     assert "书签已删除" in mock
     assert "输入: 50" in mock
     assert "文件信息" in mock
+    assert "支持 UTF-8 和 GB18030" in mock
+    assert "GBK/GB2312 通常也能打开" in mock
     assert "Ctrl+下 已经跳到结尾。" in mock
     assert "TXT_SEARCH_MODE_HINT" not in mock
     assert "教学中心" not in mock
@@ -120,6 +122,12 @@ def test_search_boundary_messages_distinguish_current_hit_from_no_match():
     assert "TXT_SEARCH_NO_PREV" in STRINGS
 
 
+def test_tutorial_mentions_supported_text_encodings():
+    tutorial = body_of("tutorial_center_page")
+    assert "支持 UTF-8 和 GB18030。" in tutorial
+    assert "GBK/GB2312 通常也能打开。" in tutorial
+
+
 def test_tutorial_strings_remain_available_for_messages():
     assert "TXT_TUTORIAL_RESET_DONE" in STRINGS
     assert "TXT_TUTORIAL_SKIP_DONE" in STRINGS
@@ -134,6 +142,7 @@ if __name__ == "__main__":
         test_tutorial_mock_reader_uses_wrapping_for_long_lines,
         test_tutorial_logs_steps_and_keys_for_serial_debugging,
         test_search_boundary_messages_distinguish_current_hit_from_no_match,
+        test_tutorial_mentions_supported_text_encodings,
         test_tutorial_strings_remain_available_for_messages,
     ]
     for test in tests:

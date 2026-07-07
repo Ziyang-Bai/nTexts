@@ -861,7 +861,8 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
     } else if (screen == TUTORIAL_SCREEN_LOADING) {
         draw_text(gc, "正在加载 tutorial_demo.txt.tns", 34, 84, Regular10, t->fg);
         draw_text(gc, "首次索引: 42%  Esc取消", 52, 108, Regular10, t->fg);
-        draw_text(gc, "之后会自动使用缓存", 62, 132, Regular9, t->muted);
+        draw_text(gc, "支持 UTF-8 和 GB18030", 52, 132, Regular9, t->fg);
+        draw_text(gc, "GBK/GB2312 通常也能打开", 48, 154, Regular9, t->muted);
     } else if (screen == TUTORIAL_SCREEN_READER || screen == TUTORIAL_SCREEN_READER_PAGE2 ||
                screen == TUTORIAL_SCREEN_READER_TOP || screen == TUTORIAL_SCREEN_READER_END ||
                screen == TUTORIAL_SCREEN_SEARCH || screen == TUTORIAL_SCREEN_SEARCH_NEXT ||
@@ -982,7 +983,7 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
         {TUTORIAL_SCREEN_HOME, "主页", "这里显示最近阅读、浏览文档和设置。", "按 0 直接进入 Documents 浏览器。", "请按 0。", 12, 0, 6, 92, 180, 22},
         {TUTORIAL_SCREEN_BROWSER, "浏览文档", "浏览器只显示目录、.txt 和 .txt.tns。", "上下移动光标。", "请按下键选择文件。", 2, 0, 6, 50, 220, 24},
         {TUTORIAL_SCREEN_BROWSER_SELECTED, "进入或打开", "选中文件夹时 Enter 进入。", "选中文本文件时 Enter 打开。", "请按 Enter 打开演示文档。", 5, 0, 6, 50, 220, 24},
-        {TUTORIAL_SCREEN_LOADING, "加载和索引", "首次打开会识别编码并建立分页索引。", "索引会缓存，下次打开会更快。", "请按 Enter 继续。", 5, 0, 42, 96, 236, 36},
+        {TUTORIAL_SCREEN_LOADING, "加载和索引", "支持 UTF-8 和 GB18030。", "GBK/GB2312 通常也能打开。", "请按 Enter 继续。", 5, 0, 42, 96, 236, 64},
         {TUTORIAL_SCREEN_READER, "阅读正文", "这是阅读区。", "左右翻页，上下按原文本物理行移动。", "请按右键翻到下一页。", 4, 0, 6, 8, 308, 176},
         {TUTORIAL_SCREEN_READER_PAGE2, "返回上一页", "阅读进度将会保存，", "重新进入将会自动续读。", "请按左键。", 3, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
         {TUTORIAL_SCREEN_READER, "快捷跳到开头", "先回到了第一页。", "Ctrl+上 会跳到整本书开头。", "请按 Ctrl+上。", 1, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
