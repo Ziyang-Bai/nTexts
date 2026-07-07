@@ -803,7 +803,7 @@ static void usage_page(Gc gc, AppState *app) {
     }
 }
 
-static void tutorial_center_page(Gc gc, AppState *app) {
+static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
     const Theme *t = &themes[app->theme];
     const char *pages[][9] = {
         {
@@ -917,13 +917,19 @@ static void tutorial_center_page(Gc gc, AppState *app) {
         draw_text(gc, pages[page][0], 8, 8, Bold10, t->fg);
         for (int i = 1; i < 8 && pages[page][i]; ++i)
             draw_text(gc, pages[page][i], 10, 30 + (i - 1) * 22, Regular9, t->fg);
-        draw_text(gc, "左右翻页  Esc/Enter返回", 8, FOOTER_Y, Regular9, t->muted);
+        draw_text(gc, "左右翻页  0跳过教学  Esc/Enter返回", 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         blit_gc(gc);
         key = wait_key();
         wait_release();
         if (key == 4 && page + 1 < count) page++;
         else if (key == 3 && page > 0) page--;
+        else if (key == 12) {
+            app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
+            storage_save_app(app, data_dir);
+            app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
+            return;
+        }
         else if (key == 5 || key == 6) return;
     }
 }
@@ -971,7 +977,7 @@ static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) 
             sel = key - 21;
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
-            else if (sel == 5) tutorial_center_page(gc, app);
+            else if (sel == 5) tutorial_center_page(gc, app, data_dir);
             else if (sel == 6) {
                 app->tutorial_flags = 0;
                 storage_save_app(app, data_dir);
@@ -986,7 +992,7 @@ static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) 
         else if (key == 3) {
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
-            else if (sel == 5) tutorial_center_page(gc, app);
+            else if (sel == 5) tutorial_center_page(gc, app, data_dir);
             else if (sel == 6) {
                 app->tutorial_flags = 0;
                 storage_save_app(app, data_dir);
@@ -1000,7 +1006,7 @@ static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) 
         } else if (key == 4 || key == 5) {
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
-            else if (sel == 5) tutorial_center_page(gc, app);
+            else if (sel == 5) tutorial_center_page(gc, app, data_dir);
             else if (sel == 6) {
                 app->tutorial_flags = 0;
                 storage_save_app(app, data_dir);
@@ -1321,7 +1327,8 @@ static void run_tutorial_if_needed(Gc gc, AppState *app, const char *data_dir) {
     if (app->tutorial_flags & TUTORIAL_ALL_SKIPPED) return;
     if (app->tutorial_flags & TUTORIAL_READER_SEEN) return;
     app_log("tutorial", "start");
-    tutorial_center_page(gc, app);
+    tutorial_center_page(gc, app, data_dir);
+    if (app->tutorial_flags & TUTORIAL_ALL_SKIPPED) return;
     if (!create_tutorial_demo(data_dir, path, sizeof(path))) {
         app_log("tutorial", "create demo failed");
         return;
