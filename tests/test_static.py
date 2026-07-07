@@ -57,6 +57,13 @@ def test_interactive_tutorial_requires_real_keys_and_keeps_skip_inside_tutorial(
     assert "TUTORIAL_ALL_SKIPPED" in tutorial
 
 
+def test_tutorial_mock_reader_uses_wrapping_for_long_lines():
+    mock = body_of("tutorial_mock_screen")
+    assert 'draw_wrapped_text(gc, "这是正文阅读区。左右翻页，上下按行移动。"' in mock
+    assert 'draw_wrapped_text(gc, "按快捷键可以搜索、跳转、书签和打开菜单。"' in mock
+    assert "TXT_SEARCH_MODE_HINT" not in mock
+
+
 def test_tutorial_strings_remain_available_for_messages():
     assert "TXT_TUTORIAL_RESET_DONE" in STRINGS
     assert "TXT_TUTORIAL_SKIP_DONE" in STRINGS
@@ -68,6 +75,7 @@ if __name__ == "__main__":
         test_reader_tutorial_does_not_draw_status_under_overlay,
         test_reader_tutorial_overlay_stays_above_footer,
         test_interactive_tutorial_requires_real_keys_and_keeps_skip_inside_tutorial,
+        test_tutorial_mock_reader_uses_wrapping_for_long_lines,
         test_tutorial_strings_remain_available_for_messages,
     ]
     for test in tests:

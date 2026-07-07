@@ -877,16 +877,19 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
         draw_text(gc, "首次索引: 42%  Esc取消", 52, 104, Regular10, t->fg);
     } else if (screen == TUTORIAL_SCREEN_READER || screen == TUTORIAL_SCREEN_SEARCH) {
         draw_text(gc, "nTexts 教学演示文档", 10, 12, Bold10, t->fg);
-        draw_text(gc, "这是正文阅读区。左右翻页，上下按行移动。", 10, 40, Regular10, t->fg);
+        draw_wrapped_text(gc, "这是正文阅读区。左右翻页，上下按行移动。", 10, 40,
+                          SCREEN_W - 20, Regular10, t->fg);
         if (screen == TUTORIAL_SCREEN_SEARCH) {
             set_color(gc, t->highlight_bg);
             gui_gc_fillRect(gc, 8, 66, SCREEN_W - 16, 22);
             draw_text(gc, "搜索命中的这一行会保持高亮。", 10, 68, Regular10, t->highlight_fg);
+            draw_text(gc, "搜索: Enter/下 下一处", 6, SCREEN_H - 28, Regular9, t->muted);
+            draw_text(gc, "上 上一处  Esc退出", 6, SCREEN_H - 14, Regular9, t->muted);
         } else {
-            draw_text(gc, "按快捷键可以搜索、跳转、书签和打开菜单。", 10, 68, Regular10, t->fg);
+            draw_wrapped_text(gc, "按快捷键可以搜索、跳转、书签和打开菜单。", 10, 68,
+                              SCREEN_W - 20, Regular10, t->fg);
+            draw_text(gc, "1/8页  12%  UTF-8", 6, SCREEN_H - 15, Regular9, t->muted);
         }
-        draw_text(gc, screen == TUTORIAL_SCREEN_SEARCH ? TXT_SEARCH_MODE_HINT : "1/8页  12%  UTF-8",
-                  6, SCREEN_H - 15, Regular9, t->muted);
     } else if (screen == TUTORIAL_SCREEN_MENU) {
         const char *items[] = {"1. 添加书签", "2. 管理书签", "3. 搜索", "4. 向后查找",
                                "5. 向前查找", "6. 跳转", "7. 阅读设置", "8. 文件信息", "9. 返回书库"};
