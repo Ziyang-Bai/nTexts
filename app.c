@@ -420,29 +420,32 @@ static void draw_page(Reader *r) {
             draw_u16(r->gc, lines[i], r->layout.margin, y, (gui_gc_Font)r->layout.font_size, t->fg);
         }
     }
-    set_color(r->gc, t->muted);
-    gui_gc_drawLine(r->gc, 0, SCREEN_H - 18, SCREEN_W, SCREEN_H - 18);
-    if (r->search_active && r->hit_offset) {
-        snprintf(status, sizeof(status), "%s", TXT_SEARCH_MODE_HINT);
+    if (r->tutorial_mode) {
+        draw_tutorial_overlay(r);
     } else {
-        snprintf(status, sizeof(status), "%lu/%lu页  %lu%%  %s",
-                 (unsigned long)(r->page + 1), (unsigned long)r->index.page_count,
-                 (unsigned long)percent_for_reader(r), text_encoding_name(r->text.encoding));
+        set_color(r->gc, t->muted);
+        gui_gc_drawLine(r->gc, 0, SCREEN_H - 18, SCREEN_W, SCREEN_H - 18);
+        if (r->search_active && r->hit_offset) {
+            snprintf(status, sizeof(status), "%s", TXT_SEARCH_MODE_HINT);
+        } else {
+            snprintf(status, sizeof(status), "%lu/%lu页  %lu%%  %s",
+                     (unsigned long)(r->page + 1), (unsigned long)r->index.page_count,
+                     (unsigned long)percent_for_reader(r), text_encoding_name(r->text.encoding));
+        }
+        draw_text(r->gc, status, 6, SCREEN_H - 15, Regular9, t->muted);
     }
-    draw_text(r->gc, status, 6, SCREEN_H - 15, Regular9, t->muted);
-    if (r->tutorial_mode) draw_tutorial_overlay(r);
     gui_gc_finish(r->gc);
     blit_gc(r->gc);
 }
 
 static void draw_tutorial_overlay(Reader *r) {
     const Theme *t = &themes[r->app->theme];
-    int box_y = 164;
+    int box_y = 126;
     if (r->tutorial_step == 0) {
         fill_dim_outside(r->gc, r->layout.margin - 2, r->layout.margin - 2,
                          SCREEN_W - r->layout.margin * 2 + 4, SCREEN_H - 44);
         set_color(r->gc, t->bg);
-        gui_gc_fillRect(r->gc, 8, box_y, SCREEN_W - 16, 43);
+        gui_gc_fillRect(r->gc, 8, box_y, SCREEN_W - 16, 58);
         draw_text(r->gc, TXT_TUTORIAL_STEP1_TITLE, 14, box_y + 6, Bold10, t->fg);
         draw_text(r->gc, TXT_TUTORIAL_STEP1_HINT, 14, box_y + 25, Regular9, t->muted);
     } else if (r->tutorial_step == 1) {
@@ -461,7 +464,7 @@ static void draw_tutorial_overlay(Reader *r) {
         fill_dim_outside(r->gc, r->layout.margin - 2, r->layout.margin - 2,
                          SCREEN_W - r->layout.margin * 2 + 4, SCREEN_H - 44);
         set_color(r->gc, t->bg);
-        gui_gc_fillRect(r->gc, 8, box_y, SCREEN_W - 16, 50);
+        gui_gc_fillRect(r->gc, 8, box_y, SCREEN_W - 16, 58);
         draw_text(r->gc, TXT_TUTORIAL_STEP4_TITLE, 14, box_y + 6, Bold10, t->fg);
         draw_text(r->gc, TXT_TUTORIAL_STEP4_HINT, 14, box_y + 26, Regular9, t->muted);
     }
@@ -977,7 +980,7 @@ static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) 
     const char *font_labels[] = {"小", "中", "大"};
     const char *theme_labels[] = {"浅色", "深色", "护眼"};
     const char *margin_labels[] = {"窄", "宽"};
-    char items[8][72];
+    char items[6][72];
     int sel = 0;
     for (;;) {
         int key;
@@ -990,69 +993,52 @@ static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) 
                  margin_labels[0], margin_labels[1], margin_labels[app->margin_choice ? 1 : 0]);
         snprintf(items[3], sizeof(items[3]), "4. 关于");
         snprintf(items[4], sizeof(items[4]), "5. 使用说明");
-        snprintf(items[5], sizeof(items[5]), "6. 教学中心");
-        snprintf(items[6], sizeof(items[6]), "7. 重置教学进度");
-        snprintf(items[7], sizeof(items[7]), "8. 跳过所有教学");
+        snprintf(items[5], sizeof(items[5]), "6. 重置教学进度");
         gui_gc_begin(gc);
         set_color(gc, t->bg);
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
         draw_text(gc, "阅读设置", 8, 6, Bold12, t->fg);
-        for (int i = 0; i < 8; ++i) {
-            int y = 32 + i * 22;
+        for (int i = 0; i < 6; ++i) {
+            int y = 34 + i * 25;
             if (i == sel) {
                 set_color(gc, t->highlight_bg);
                 gui_gc_fillRect(gc, 4, y - 2, SCREEN_W - 8, 20);
             }
             draw_text(gc, items[i], 10, y, Regular10, i == sel ? t->highlight_fg : t->fg);
         }
-        draw_text(gc, "1-8直达  左右/Enter执行  Esc返回", 8, FOOTER_Y, Regular9, t->muted);
+        draw_text(gc, "1-6直达  左右/Enter执行  Esc返回", 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         blit_gc(gc);
         key = wait_key(); wait_release();
-        if (key == 1) sel = sel > 0 ? sel - 1 : 7;
-        else if (key == 2) sel = sel < 7 ? sel + 1 : 0;
-        else if (key >= 21 && key <= 28) {
+        if (key == 1) sel = sel > 0 ? sel - 1 : 5;
+        else if (key == 2) sel = sel < 5 ? sel + 1 : 0;
+        else if (key >= 21 && key <= 26) {
             sel = key - 21;
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
-            else if (sel == 5) tutorial_center_page(gc, app, data_dir);
-            else if (sel == 6) {
+            else if (sel == 5) {
                 app->tutorial_flags = 0;
                 storage_save_app(app, data_dir);
                 app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_RESET_DONE);
-            } else if (sel == 7) {
-                app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
-                storage_save_app(app, data_dir);
-                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
             }
             else if (apply_setting_change(r, app, data_dir, sel, 1) < 0) return -1;
         }
         else if (key == 3) {
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
-            else if (sel == 5) tutorial_center_page(gc, app, data_dir);
-            else if (sel == 6) {
+            else if (sel == 5) {
                 app->tutorial_flags = 0;
                 storage_save_app(app, data_dir);
                 app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_RESET_DONE);
-            } else if (sel == 7) {
-                app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
-                storage_save_app(app, data_dir);
-                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
             }
             else if (apply_setting_change(r, app, data_dir, sel, -1) < 0) return -1;
         } else if (key == 4 || key == 5) {
             if (sel == 3) about_page(gc, app);
             else if (sel == 4) usage_page(gc, app);
-            else if (sel == 5) tutorial_center_page(gc, app, data_dir);
-            else if (sel == 6) {
+            else if (sel == 5) {
                 app->tutorial_flags = 0;
                 storage_save_app(app, data_dir);
                 app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_RESET_DONE);
-            } else if (sel == 7) {
-                app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
-                storage_save_app(app, data_dir);
-                app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
             }
             else if (apply_setting_change(r, app, data_dir, sel, 1) < 0) return -1;
         } else if (key == 6) {
