@@ -1,5 +1,6 @@
 #include "storage.h"
 #include "app_log.h"
+#include "crc32.h"
 #include <libndls.h>
 #include <errno.h>
 #include <stdio.h>
@@ -8,7 +9,37 @@
 
 #define APP_MAGIC 0x5053544eu
 #define BOOK_MAGIC 0x4b42544eu
-#define STATE_VERSION 3u
+#define STATE_VERSION 4u
+#define LEGACY_STATE_VERSION 3u
+
+typedef struct {
+    uint32_t magic, version;
+    char path[512];
+    uint32_t file_size, file_mtime;
+    TextPosition progress;
+    uint32_t bookmark_count;
+    Bookmark bookmarks[MAX_BOOKMARKS];
+} LegacyBookState;
+
+typedef struct {
+    uint32_t magic, version;
+    int font_choice, theme, margin_choice;
+    uint32_t tutorial_flags;
+    uint32_t recent_count;
+    RecentBook recents[MAX_RECENTS];
+    uint32_t history_count;
+    uint16_t history[MAX_HISTORY][QUERY_LEN];
+} LegacyAppState;
+
+#define SIZE_ASSERT(name, condition) typedef char size_assert_##name[(condition) ? 1 : -1]
+SIZE_ASSERT(text_position, sizeof(TextPosition) == 8);
+SIZE_ASSERT(bookmark, sizeof(Bookmark) == 108);
+SIZE_ASSERT(recent_book, sizeof(RecentBook) == 520);
+SIZE_ASSERT(legacy_book_state, sizeof(LegacyBookState) == 2700);
+SIZE_ASSERT(book_state, sizeof(BookState) == 2704);
+SIZE_ASSERT(legacy_app_state, sizeof(LegacyAppState) == 6512);
+SIZE_ASSERT(chapter_rules, sizeof(ChapterRules) == 772);
+SIZE_ASSERT(app_state, sizeof(AppState) == 7284);
 
 uint32_t storage_hash_path(const char *path) {
     uint32_t h = 2166136261u;
@@ -58,91 +89,328 @@ void storage_book_path(char *out, size_t capacity, const char *directory, const 
     snprintf(out, capacity, "%s/%08lx.%s", directory, (unsigned long)storage_hash_path(book), suffix);
 }
 
+static int has_terminator(const void *data, size_t count, size_t unit_size) {
+    size_t i;
+    if (unit_size == 1) return memchr(data, 0, count) != NULL;
+    for (i = 0; i < count; ++i) {
+        if (((const uint16_t *)data)[i] == 0) return 1;
+    }
+    return 0;
+}
+
+static int app_common_valid(uint32_t magic, uint32_t version, int font_choice, int theme,
+                            int margin_choice, uint32_t tutorial_flags, uint32_t recent_count,
+                            const RecentBook *recents, uint32_t history_count,
+                            const uint16_t history[MAX_HISTORY][QUERY_LEN]) {
+    uint32_t i;
+    if (magic != APP_MAGIC || version == 0 || font_choice < 0 || font_choice > 2 ||
+        theme < 0 || theme > 2 || margin_choice < 0 || margin_choice > 1 ||
+        (tutorial_flags & ~(TUTORIAL_READER_SEEN | TUTORIAL_ALL_SKIPPED)) ||
+        recent_count > MAX_RECENTS || history_count > MAX_HISTORY) return 0;
+    for (i = 0; i < recent_count; ++i) {
+        if (!recents[i].path[0] || !has_terminator(recents[i].path, sizeof(recents[i].path), 1) ||
+            recents[i].offset > recents[i].file_size) return 0;
+    }
+    for (i = 0; i < history_count; ++i) {
+        if (!has_terminator(history[i], QUERY_LEN, sizeof(uint16_t))) return 0;
+    }
+    return 1;
+}
+
+static int app_valid(const AppState *state) {
+    return app_common_valid(state->magic, state->version, state->font_choice, state->theme,
+                            state->margin_choice, state->tutorial_flags, state->recent_count,
+                            state->recents, state->history_count, state->history) &&
+           state->version == STATE_VERSION && chapter_rules_validate(&state->chapter_rules);
+}
+
+static int legacy_app_valid(const LegacyAppState *state) {
+    return state->version == LEGACY_STATE_VERSION &&
+           app_common_valid(state->magic, state->version, state->font_choice, state->theme,
+                            state->margin_choice, state->tutorial_flags, state->recent_count,
+                            state->recents, state->history_count, state->history);
+}
+
+static int encoding_valid(uint32_t encoding) {
+    return encoding >= TEXT_UTF8 && encoding <= TEXT_UTF16_BE;
+}
+
+static int bookmark_valid(const Bookmark *bookmark, uint32_t file_size) {
+    return bookmark->position.byte_offset <= file_size && bookmark->position.source_line > 0 &&
+           has_terminator(bookmark->excerpt, EXCERPT_LEN, sizeof(uint16_t));
+}
+
+static int book_common_valid(uint32_t magic, uint32_t version, const char *path,
+                             uint32_t file_size, TextPosition progress, uint32_t bookmark_count,
+                             const Bookmark *bookmarks) {
+    uint32_t i;
+    if (magic != BOOK_MAGIC || version == 0 || !path[0] || !has_terminator(path, 512, 1) ||
+        progress.byte_offset > file_size || !progress.source_line ||
+        bookmark_count > MAX_BOOKMARKS) return 0;
+    for (i = 0; i < bookmark_count; ++i) {
+        if (!bookmark_valid(&bookmarks[i], file_size)) return 0;
+    }
+    return 1;
+}
+
+static int book_valid(const BookState *state) {
+    return state->version == STATE_VERSION && encoding_valid(state->encoding) &&
+           book_common_valid(state->magic, state->version, state->path, state->file_size,
+                             state->progress, state->bookmark_count, state->bookmarks);
+}
+
+static int legacy_book_valid(const LegacyBookState *state) {
+    return state->version == LEGACY_STATE_VERSION &&
+           book_common_valid(state->magic, state->version, state->path, state->file_size,
+                             state->progress, state->bookmark_count, state->bookmarks);
+}
+
+static void put_le32(unsigned char out[4], uint32_t value) {
+    out[0] = (unsigned char)value;
+    out[1] = (unsigned char)(value >> 8);
+    out[2] = (unsigned char)(value >> 16);
+    out[3] = (unsigned char)(value >> 24);
+}
+
+static uint32_t get_le32(const unsigned char in[4]) {
+    return (uint32_t)in[0] | ((uint32_t)in[1] << 8) |
+           ((uint32_t)in[2] << 16) | ((uint32_t)in[3] << 24);
+}
+
 static int atomic_write(const char *path, const void *data, size_t size) {
     char tmp[600];
     FILE *fp;
+    unsigned char trailer[4];
+    uint32_t crc = crc32_finish(crc32_update(CRC32_INITIAL, data, size));
+    int ok;
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
     fp = fopen(tmp, "wb");
     if (!fp) return 0;
-    if (fwrite(data, 1, size, fp) != size) { fclose(fp); remove(tmp); return 0; }
-    fclose(fp); remove(path);
-    return rename(tmp, path) == 0;
+    put_le32(trailer, crc);
+    ok = fwrite(data, 1, size, fp) == size &&
+         fwrite(trailer, 1, sizeof(trailer), fp) == sizeof(trailer) &&
+         fflush(fp) == 0;
+    if (fclose(fp) != 0) ok = 0;
+    if (!ok) {
+        remove(tmp);
+        return 0;
+    }
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return 0;
+    }
+    return 1;
+}
+
+static int file_length(FILE *fp, size_t *length) {
+    long end;
+    if (fseek(fp, 0, SEEK_END) != 0 || (end = ftell(fp)) < 0 || fseek(fp, 0, SEEK_SET) != 0)
+        return 0;
+    *length = (size_t)end;
+    return 1;
+}
+
+static int read_checked_payload(FILE *fp, void *data, size_t size) {
+    unsigned char trailer[4];
+    uint32_t actual;
+    uint32_t expected;
+    if (fread(data, 1, size, fp) != size || fread(trailer, 1, sizeof(trailer), fp) != sizeof(trailer))
+        return 0;
+    actual = crc32_finish(crc32_update(CRC32_INITIAL, data, size));
+    expected = get_le32(trailer);
+    return actual == expected;
 }
 
 void storage_app_defaults(AppState *state) {
     memset(state, 0, sizeof(*state));
-    state->magic = APP_MAGIC; state->version = STATE_VERSION;
-    state->font_choice = 1; state->theme = 0; state->margin_choice = 0;
+    state->magic = APP_MAGIC;
+    state->version = STATE_VERSION;
+    state->font_choice = 1;
+    state->theme = 0;
+    state->margin_choice = 0;
+    chapter_rules_defaults(&state->chapter_rules);
 }
 
 int storage_load_app(AppState *state, const char *directory) {
-    char path[600]; FILE *fp;
+    char path[600];
+    FILE *fp;
+    size_t length;
+    AppState candidate;
+    LegacyAppState legacy;
     snprintf(path, sizeof(path), "%s/app.state", directory);
-    app_log("storage", "load app %s", path);
+    storage_app_defaults(state);
     fp = fopen(path, "rb");
-    if (!fp || fread(state, sizeof(*state), 1, fp) != 1 || state->magic != APP_MAGIC ||
-        state->version != STATE_VERSION || state->recent_count > MAX_RECENTS || state->history_count > MAX_HISTORY) {
-        if (fp) fclose(fp);
-        storage_app_defaults(state);
-        app_log("storage", "app defaults");
+    if (!fp) {
+        app_log("storage", "app miss");
         return 0;
     }
+    if (!file_length(fp, &length)) {
+        fclose(fp);
+        app_log("storage", "app size");
+        return 0;
+    }
+    if (length == sizeof(candidate) + 4) {
+        if (!read_checked_payload(fp, &candidate, sizeof(candidate))) {
+            fclose(fp);
+            app_log("storage", "app checksum");
+            return 0;
+        }
+        fclose(fp);
+        if (!app_valid(&candidate)) {
+            app_log("storage", "app fields");
+            return 0;
+        }
+        *state = candidate;
+        return 1;
+    }
+    if (length == sizeof(legacy)) {
+        if (fread(&legacy, 1, sizeof(legacy), fp) != sizeof(legacy)) {
+            fclose(fp);
+            app_log("storage", "app size");
+            return 0;
+        }
+        fclose(fp);
+        if (!legacy_app_valid(&legacy)) {
+            app_log("storage", "app incompatible");
+            return 0;
+        }
+        memcpy(state, &legacy, sizeof(legacy));
+        state->version = STATE_VERSION;
+        chapter_rules_defaults(&state->chapter_rules);
+        app_log("storage", "app migrated v3");
+        return 1;
+    }
     fclose(fp);
-    app_log("storage", "app ok recents=%lu history=%lu",
-            (unsigned long)state->recent_count, (unsigned long)state->history_count);
-    return 1;
+    app_log("storage", "app size");
+    return 0;
 }
 
 int storage_save_app(const AppState *state, const char *directory) {
-    char path[600]; snprintf(path, sizeof(path), "%s/app.state", directory);
-    app_log("storage", "save app recents=%lu", (unsigned long)state->recent_count);
+    char path[600];
+    if (!app_valid(state)) {
+        app_log("storage", "save app fields");
+        return 0;
+    }
+    snprintf(path, sizeof(path), "%s/app.state", directory);
     return atomic_write(path, state, sizeof(*state));
 }
 
 void storage_book_defaults(BookState *state, TextFile *text) {
-    memset(state, 0, sizeof(*state)); state->magic = BOOK_MAGIC; state->version = STATE_VERSION;
+    memset(state, 0, sizeof(*state));
+    state->magic = BOOK_MAGIC;
+    state->version = STATE_VERSION;
     strncpy(state->path, text->path, sizeof(state->path) - 1);
-    state->file_size = text->size; state->file_mtime = text->mtime;
-    state->progress.byte_offset = text->data_start; state->progress.source_line = 1;
+    state->file_size = text->size;
+    state->file_mtime = text->mtime;
+    state->encoding = (uint32_t)text->encoding;
+    state->progress.byte_offset = text->data_start;
+    state->progress.source_line = 1;
+}
+
+static void adapt_stale_book(BookState *state, TextFile *text) {
+    Bookmark kept[MAX_BOOKMARKS];
+    uint32_t kept_count = state->bookmark_count;
+    uint32_t i;
+    for (i = 0; i < kept_count; ++i) {
+        kept[i] = state->bookmarks[i];
+        if (kept[i].position.byte_offset > text->size)
+            kept[i].position.byte_offset = text->size;
+        if (!kept[i].position.source_line)
+            kept[i].position.source_line = 1;
+    }
+    storage_book_defaults(state, text);
+    state->bookmark_count = kept_count;
+    for (i = 0; i < kept_count; ++i) state->bookmarks[i] = kept[i];
 }
 
 int storage_load_book(BookState *state, TextFile *text, const char *directory) {
-    char path[600]; FILE *fp;
-    Bookmark kept[MAX_BOOKMARKS];
-    uint32_t kept_count = 0, i;
+    char path[600];
+    FILE *fp;
+    size_t length;
+    BookState candidate;
+    LegacyBookState legacy;
+    storage_book_defaults(state, text);
     storage_book_path(path, sizeof(path), directory, text->path, "state");
-    app_log("storage", "load book state %s", path);
     fp = fopen(path, "rb");
-    if (!fp || fread(state, sizeof(*state), 1, fp) != 1 || state->magic != BOOK_MAGIC ||
-        state->version != STATE_VERSION || strcmp(state->path, text->path) || state->bookmark_count > MAX_BOOKMARKS) {
-        if (fp) fclose(fp);
-        storage_book_defaults(state, text);
+    if (!fp) {
+        app_log("storage", "book miss");
         return 0;
     }
-    fclose(fp);
-    if (state->file_size != text->size || state->file_mtime != text->mtime) {
-        for (i = 0; i < state->bookmark_count; ++i) {
-            kept[kept_count] = state->bookmarks[i];
-            if (kept[kept_count].position.byte_offset > text->size)
-                kept[kept_count].position.byte_offset = text->size;
-            if (!kept[kept_count].position.source_line)
-                kept[kept_count].position.source_line = 1;
-            kept_count++;
+    if (!file_length(fp, &length)) {
+        fclose(fp);
+        app_log("storage", "book size");
+        return 0;
+    }
+    if (length == sizeof(candidate) + 4) {
+        if (!read_checked_payload(fp, &candidate, sizeof(candidate))) {
+            fclose(fp);
+            app_log("storage", "book checksum");
+            return 0;
         }
-        storage_book_defaults(state, text);
-        state->bookmark_count = kept_count;
-        for (i = 0; i < kept_count; ++i) state->bookmarks[i] = kept[i];
+        fclose(fp);
+        if (!book_valid(&candidate)) {
+            app_log("storage", "book fields");
+            return 0;
+        }
+        if (strcmp(candidate.path, text->path)) {
+            app_log("storage", "book path");
+            return 0;
+        }
+        if (candidate.encoding != (uint32_t)text->encoding) {
+            app_log("storage", "book incompatible encoding");
+            return 0;
+        }
+        *state = candidate;
+    } else if (length == sizeof(legacy)) {
+        if (fread(&legacy, 1, sizeof(legacy), fp) != sizeof(legacy)) {
+            fclose(fp);
+            app_log("storage", "book size");
+            return 0;
+        }
+        fclose(fp);
+        if (!legacy_book_valid(&legacy)) {
+            app_log("storage", "book incompatible");
+            return 0;
+        }
+        if (strcmp(legacy.path, text->path)) {
+            app_log("storage", "book path");
+            return 0;
+        }
+        if (text->encoding != TEXT_UTF8 && text->encoding != TEXT_GB18030) {
+            app_log("storage", "book incompatible encoding");
+            return 0;
+        }
+        storage_book_defaults(&candidate, text);
+        memcpy(candidate.path, legacy.path, sizeof(candidate.path));
+        candidate.file_size = legacy.file_size;
+        candidate.file_mtime = legacy.file_mtime;
+        candidate.progress = legacy.progress;
+        candidate.bookmark_count = legacy.bookmark_count;
+        memcpy(candidate.bookmarks, legacy.bookmarks, sizeof(candidate.bookmarks));
+        *state = candidate;
+        app_log("storage", "book migrated v3");
+    } else {
+        fclose(fp);
+        app_log("storage", "book size");
+        return 0;
+    }
+    if (state->file_size != text->size || state->file_mtime != text->mtime) {
+        adapt_stale_book(state, text);
         return 1;
     }
-    if (state->progress.byte_offset > text->size) state->progress.byte_offset = text->size;
-    state->file_size = text->size; state->file_mtime = text->mtime;
+    state->file_size = text->size;
+    state->file_mtime = text->mtime;
+    state->encoding = (uint32_t)text->encoding;
     return 1;
 }
 
 int storage_save_book(const BookState *state, const char *directory) {
-    char path[600]; storage_book_path(path, sizeof(path), directory, state->path, "state");
-    app_log("storage", "save book offset=%lu path=%s",
-            (unsigned long)state->progress.byte_offset, state->path);
+    char path[600];
+    if (!book_valid(state)) {
+        app_log("storage", "save book fields");
+        return 0;
+    }
+    storage_book_path(path, sizeof(path), directory, state->path, "state");
     return atomic_write(path, state, sizeof(*state));
 }
 

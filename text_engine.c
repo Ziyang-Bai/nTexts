@@ -68,7 +68,14 @@ int text_open(TextFile *text, const char *path) {
     text->mtime = (uint32_t)st.st_mtime;
     fread(bom, 1, 3, text->fp);
     if (bom[0] == 0xef && bom[1] == 0xbb && bom[2] == 0xbf) {
-        text->encoding = TEXT_UTF8; text->data_start = 3;
+        text->encoding = TEXT_UTF8;
+        text->data_start = 3;
+    } else if (bom[0] == 0xff && bom[1] == 0xfe) {
+        text->encoding = TEXT_UTF16_LE;
+        text->data_start = 2;
+    } else if (bom[0] == 0xfe && bom[1] == 0xff) {
+        text->encoding = TEXT_UTF16_BE;
+        text->data_start = 2;
     } else {
         text->data_start = 0;
         text->encoding = text_utf8_valid_sample(text->fp, 0, 65536) ? TEXT_UTF8 : TEXT_GB18030;
@@ -92,15 +99,45 @@ void text_decoder_at(TextFile *text, TextDecoder *decoder, TextPosition position
     fseek(text->fp, decoder->offset, SEEK_SET);
 }
 
+static int read_utf16_unit_at(TextFile *text, uint32_t offset, uint16_t *value) {
+    int first;
+    int second;
+    if (offset + 1 >= text->size) return 0;
+    fseek(text->fp, offset, SEEK_SET);
+    first = fgetc(text->fp);
+    second = fgetc(text->fp);
+    if (first == EOF || second == EOF) return 0;
+    if (text->encoding == TEXT_UTF16_LE) {
+        *value = (uint16_t)((unsigned)first | ((unsigned)second << 8));
+    } else {
+        *value = (uint16_t)(((unsigned)first << 8) | (unsigned)second);
+    }
+    return 1;
+}
+
 TextPosition text_safe_position(TextFile *text, uint32_t offset, uint32_t fallback_line) {
     TextPosition p;
     int c;
     uint32_t i;
+    p.source_line = fallback_line ? fallback_line : 1;
     if (offset < text->data_start) offset = text->data_start;
     if (offset > text->size) offset = text->size;
+    if ((text->encoding == TEXT_UTF16_LE || text->encoding == TEXT_UTF16_BE) &&
+        offset != text->data_start && offset != text->size) {
+        uint16_t unit;
+        uint16_t previous;
+        offset = text->data_start + ((offset - text->data_start) & ~1u);
+        if (read_utf16_unit_at(text, offset, &unit) && unit >= 0xdc00 && unit <= 0xdfff &&
+            offset >= text->data_start + 2 &&
+            read_utf16_unit_at(text, offset - 2, &previous) &&
+            previous >= 0xd800 && previous <= 0xdbff) {
+            offset -= 2;
+        }
+        p.byte_offset = offset;
+        return p;
+    }
     p.byte_offset = offset;
-    p.source_line = fallback_line ? fallback_line : 1;
-    if (text->encoding == TEXT_GB18030 || offset == text->data_start || offset == text->size) return p;
+    if (text->encoding != TEXT_UTF8 || offset == text->data_start || offset == text->size) return p;
     fseek(text->fp, offset, SEEK_SET);
     c = fgetc(text->fp);
     if (c == EOF || ((unsigned char)c & 0xc0) != 0x80) return p;
@@ -159,6 +196,57 @@ static int next_gb(TextDecoder *d, int first, uint16_t *out) {
     return 1;
 }
 
+static int next_utf16(TextDecoder *d, int first, uint16_t *out) {
+    int second;
+    int third;
+    int fourth;
+    uint16_t unit;
+    uint16_t following;
+    uint32_t following_offset;
+
+    second = fgetc(d->text->fp);
+    if (second == EOF) {
+        *out = 0xfffd;
+        return 1;
+    }
+    d->offset++;
+    if (d->text->encoding == TEXT_UTF16_LE) {
+        unit = (uint16_t)((unsigned)first | ((unsigned)second << 8));
+    } else {
+        unit = (uint16_t)(((unsigned)first << 8) | (unsigned)second);
+    }
+    if (unit >= 0xdc00 && unit <= 0xdfff) {
+        *out = 0xfffd;
+        return 1;
+    }
+    if (unit < 0xd800 || unit > 0xdbff) {
+        *out = unit;
+        return 1;
+    }
+
+    following_offset = d->offset;
+    third = fgetc(d->text->fp);
+    fourth = fgetc(d->text->fp);
+    if (third == EOF || fourth == EOF) {
+        fseek(d->text->fp, following_offset, SEEK_SET);
+        *out = 0xfffd;
+        return 1;
+    }
+    if (d->text->encoding == TEXT_UTF16_LE) {
+        following = (uint16_t)((unsigned)third | ((unsigned)fourth << 8));
+    } else {
+        following = (uint16_t)(((unsigned)third << 8) | (unsigned)fourth);
+    }
+    if (following < 0xdc00 || following > 0xdfff) {
+        fseek(d->text->fp, following_offset, SEEK_SET);
+        *out = 0xfffd;
+        return 1;
+    }
+    d->offset += 2;
+    *out = 0xfffd;
+    return 1;
+}
+
 int text_next(TextDecoder *decoder, uint16_t *value, uint32_t *char_offset) {
     int first;
     if (decoder->offset >= decoder->text->size) return 0;
@@ -166,16 +254,68 @@ int text_next(TextDecoder *decoder, uint16_t *value, uint32_t *char_offset) {
     first = fgetc(decoder->text->fp);
     if (first == EOF) return 0;
     decoder->offset++;
-    if (decoder->text->encoding == TEXT_UTF8) next_utf8(decoder, first, value);
-    else next_gb(decoder, first, value);
+    switch (decoder->text->encoding) {
+        case TEXT_UTF8:
+            next_utf8(decoder, first, value);
+            break;
+        case TEXT_GB18030:
+            next_gb(decoder, first, value);
+            break;
+        case TEXT_UTF16_LE:
+        case TEXT_UTF16_BE:
+            next_utf16(decoder, first, value);
+            break;
+        default:
+            *value = 0xfffd;
+            break;
+    }
     if (*value == '\n') decoder->line++;
     return 1;
 }
 
 const char *text_encoding_name(TextEncoding encoding) {
-    return encoding == TEXT_UTF8 ? "UTF-8" : "GB18030";
+    switch (encoding) {
+        case TEXT_UTF8: return "UTF-8";
+        case TEXT_GB18030: return "GB18030";
+        case TEXT_UTF16_LE: return "UTF-16 LE";
+        case TEXT_UTF16_BE: return "UTF-16 BE";
+        default: return "Unknown";
+    }
 }
 
 uint16_t text_fold_ascii(uint16_t value) {
     return value >= 'A' && value <= 'Z' ? (uint16_t)(value + ('a' - 'A')) : value;
+}
+
+void text_make_excerpt(TextFile *text, TextPosition position, uint16_t *out, size_t capacity) {
+    TextDecoder decoder;
+    uint16_t value;
+    uint32_t offset;
+    size_t length = 0;
+    int started = 0;
+    int pending_space = 0;
+
+    if (!capacity) return;
+    out[0] = 0;
+    text_decoder_at(text, &decoder, position);
+    while (text_next(&decoder, &value, &offset)) {
+        (void)offset;
+        if (value == '\r') continue;
+        if (value == '\n') {
+            if (started) break;
+            pending_space = 0;
+            continue;
+        }
+        if (value <= ' ' || value == 0x3000) {
+            if (started) pending_space = 1;
+            continue;
+        }
+        if (pending_space && length + 1 < capacity) out[length++] = ' ';
+        pending_space = 0;
+        started = 1;
+        if (length + 1 >= capacity) break;
+        out[length++] = value;
+    }
+    if (length && out[length - 1] == ' ') --length;
+    out[length] = 0;
 }

@@ -2,6 +2,7 @@
 #define NTEXTS_STORAGE_H
 
 #include "text_engine.h"
+#include "chapter_rules.h"
 #include <stdint.h>
 
 #define MAX_BOOKMARKS 20
@@ -20,6 +21,7 @@ typedef struct {
     uint32_t magic, version;
     char path[512];
     uint32_t file_size, file_mtime;
+    uint32_t encoding;
     TextPosition progress;
     uint32_t bookmark_count;
     Bookmark bookmarks[MAX_BOOKMARKS];
@@ -38,6 +40,7 @@ typedef struct {
     RecentBook recents[MAX_RECENTS];
     uint32_t history_count;
     uint16_t history[MAX_HISTORY][QUERY_LEN];
+    ChapterRules chapter_rules;
 } AppState;
 
 uint32_t storage_hash_path(const char *path);

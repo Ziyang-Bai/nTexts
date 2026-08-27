@@ -5,7 +5,12 @@
 #include <stdint.h>
 #include <sys/stat.h>
 
-typedef enum { TEXT_UTF8 = 1, TEXT_GB18030 = 2 } TextEncoding;
+typedef enum {
+    TEXT_UTF8 = 1,
+    TEXT_GB18030 = 2,
+    TEXT_UTF16_LE = 3,
+    TEXT_UTF16_BE = 4
+} TextEncoding;
 
 typedef struct {
     uint32_t byte_offset;
@@ -35,5 +40,6 @@ int text_next(TextDecoder *decoder, uint16_t *value, uint32_t *char_offset);
 int text_utf8_valid_sample(FILE *fp, uint32_t start, uint32_t max_bytes);
 const char *text_encoding_name(TextEncoding encoding);
 uint16_t text_fold_ascii(uint16_t value);
+void text_make_excerpt(TextFile *text, TextPosition position, uint16_t *out, size_t capacity);
 
 #endif
