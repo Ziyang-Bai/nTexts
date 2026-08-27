@@ -1,5 +1,7 @@
 # nTexts
 
+[![Build](https://github.com/Ziyang-Bai/nTexts/actions/workflows/build.yml/badge.svg)](https://github.com/Ziyang-Bai/nTexts/actions/workflows/build.yml)
+
 TI-Nspire CX / CX II 的轻量纯文本阅读器，使用 Ndless SDK 构建。
 
 ## 功能

@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run host and static tests
+        run: make test
+
+      - name: Set up Ndless
+        id: ndless
+        uses: Ziyang-Bai/setup-ndless@v1
+
+      - name: Build calculator package
+        run: ./tools/build-wsl.sh
+
+      - name: Upload calculator package
+        uses: actions/upload-artifact@v7
+        with:
+          name: nTexts-${{ github.sha }}
+          path: nTexts.tns
+          if-no-files-found: error
+          retention-days: 14
