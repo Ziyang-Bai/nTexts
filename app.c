@@ -826,7 +826,7 @@ static void about_page(Gc gc, AppState *app) {
         draw_text(gc, "版本: v.0.0 Alpha", 10, 78, Regular10, t->fg);
         draw_text(gc, "作者: Ziyang-Bai", 10, 108, Regular10, t->fg);
         draw_text(gc, "Copyright (c) 2026 Ziyang-Bai", 10, 140, Regular9, t->fg);
-        draw_text(gc, "All rights reserved.", 10, 160, Regular9, t->fg);
+        draw_text(gc, "License: GNU GPL v3.0", 10, 160, Regular9, t->fg);
         draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         blit_gc(gc);
