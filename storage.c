@@ -1,6 +1,7 @@
 #include "storage.h"
 #include "app_log.h"
 #include "crc32.h"
+#include "file_replace.h"
 #include <libndls.h>
 #include <errno.h>
 #include <stdio.h>
@@ -178,28 +179,15 @@ static uint32_t get_le32(const unsigned char in[4]) {
 }
 
 static int atomic_write(const char *path, const void *data, size_t size) {
-    char tmp[600];
-    FILE *fp;
     unsigned char trailer[4];
+    FilePart parts[2];
     uint32_t crc = crc32_finish(crc32_update(CRC32_INITIAL, data, size));
-    int ok;
-    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-    fp = fopen(tmp, "wb");
-    if (!fp) return 0;
     put_le32(trailer, crc);
-    ok = fwrite(data, 1, size, fp) == size &&
-         fwrite(trailer, 1, sizeof(trailer), fp) == sizeof(trailer) &&
-         fflush(fp) == 0;
-    if (fclose(fp) != 0) ok = 0;
-    if (!ok) {
-        remove(tmp);
-        return 0;
-    }
-    if (rename(tmp, path) != 0) {
-        remove(tmp);
-        return 0;
-    }
-    return 1;
+    parts[0].data = data;
+    parts[0].size = size;
+    parts[1].data = trailer;
+    parts[1].size = sizeof(trailer);
+    return file_replace_parts(path, parts, 2);
 }
 
 static int file_length(FILE *fp, size_t *length) {

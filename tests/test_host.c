@@ -1,5 +1,6 @@
 #include "chapter_rules.h"
 #include "crc32.h"
+#include "file_replace.h"
 #include "reader_index.h"
 #include "storage.h"
 #include "text_engine.h"
@@ -14,6 +15,8 @@
 #define BOOK_MAGIC 0x4b42544eu
 #define LEGACY_VERSION 3u
 
+
+extern int host_rename_calls;
 static const char *test_directory;
 
 #define CHECK(condition) do { \
@@ -125,6 +128,40 @@ static int test_crc32_known_vector(void) {
     state = crc32_update(state, vector, 4);
     state = crc32_update(state, vector + 4, 5);
     CHECK(crc32_finish(state) == 0xcbf43926u);
+    return 1;
+}
+
+static int test_ndless_rename_fallback(void) {
+    static const char first[] = "first state";
+    static const char second[] = "updated state";
+    char path[600];
+    char temporary[604];
+    FilePart part;
+    unsigned char *saved;
+    size_t saved_size;
+
+    make_path(path, sizeof(path), "rename-fallback.state");
+    snprintf(temporary, sizeof(temporary), "%s.tmp", path);
+    remove(path);
+    remove(temporary);
+    host_rename_calls = 0;
+    part.data = first;
+    part.size = sizeof(first);
+    CHECK(file_replace_parts(path, &part, 1));
+    CHECK(host_rename_calls == 1);
+    saved = read_bytes(path, &saved_size);
+    CHECK(saved && saved_size == sizeof(first) && memcmp(saved, first, sizeof(first)) == 0);
+    free(saved);
+    CHECK(fopen(temporary, "rb") == NULL);
+
+    part.data = second;
+    part.size = sizeof(second);
+    CHECK(file_replace_parts(path, &part, 1));
+    CHECK(host_rename_calls == 2);
+    saved = read_bytes(path, &saved_size);
+    CHECK(saved && saved_size == sizeof(second) && memcmp(saved, second, sizeof(second)) == 0);
+    free(saved);
+    CHECK(fopen(temporary, "rb") == NULL);
     return 1;
 }
 
@@ -577,6 +614,7 @@ typedef struct {
 int main(int argc, char **argv) {
     static const TestCase tests[] = {
         {"test_crc32_known_vector", test_crc32_known_vector},
+        {"test_ndless_rename_fallback", test_ndless_rename_fallback},
         {"test_utf16_decoding_and_positions", test_utf16_decoding_and_positions},
         {"test_chapter_rules_and_index_round_trip", test_chapter_rules_and_index_round_trip},
         {"test_bookmark_excerpt", test_bookmark_excerpt},
@@ -596,6 +634,6 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    puts("7 host behavioral tests passed");
+    puts("8 host behavioral tests passed");
     return 0;
 }

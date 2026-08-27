@@ -1,6 +1,7 @@
 #include "reader_index.h"
 #include "app_log.h"
 #include "crc32.h"
+#include "file_replace.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -192,12 +193,10 @@ static uint32_t get_le32(const unsigned char in[4]) {
 }
 
 int index_save(const PageIndex *index, const char *path) {
-    char tmp[600];
-    FILE *fp;
     IndexHeader h;
     unsigned char trailer[4];
+    FilePart parts[5];
     uint32_t crc = CRC32_INITIAL;
-    int ok;
     if (!index->page_count || !index->line_count || !index->pages || !index->lines ||
         index->chapter_count > MAX_CHAPTERS ||
         (index->chapter_count && !index->chapters) || index->chapters_truncated > 1) return 0;
@@ -222,25 +221,17 @@ int index_save(const PageIndex *index, const char *path) {
     crc = crc32_update(crc, index->lines, index->line_count * sizeof(*index->lines));
     crc = crc32_update(crc, index->chapters, index->chapter_count * sizeof(*index->chapters));
     put_le32(trailer, crc32_finish(crc));
-    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-    fp = fopen(tmp, "wb");
-    if (!fp) return 0;
-    ok = fwrite(&h, 1, sizeof(h), fp) == sizeof(h) &&
-         fwrite(index->pages, sizeof(*index->pages), index->page_count, fp) == index->page_count &&
-         fwrite(index->lines, sizeof(*index->lines), index->line_count, fp) == index->line_count &&
-         fwrite(index->chapters, sizeof(*index->chapters), index->chapter_count, fp) == index->chapter_count &&
-         fwrite(trailer, 1, sizeof(trailer), fp) == sizeof(trailer) &&
-         fflush(fp) == 0;
-    if (fclose(fp) != 0) ok = 0;
-    if (!ok) {
-        remove(tmp);
-        return 0;
-    }
-    if (rename(tmp, path) != 0) {
-        remove(tmp);
-        return 0;
-    }
-    return 1;
+    parts[0].data = &h;
+    parts[0].size = sizeof(h);
+    parts[1].data = index->pages;
+    parts[1].size = index->page_count * sizeof(*index->pages);
+    parts[2].data = index->lines;
+    parts[2].size = index->line_count * sizeof(*index->lines);
+    parts[3].data = index->chapters;
+    parts[3].size = index->chapter_count * sizeof(*index->chapters);
+    parts[4].data = trailer;
+    parts[4].size = sizeof(trailer);
+    return file_replace_parts(path, parts, 5);
 }
 
 static int file_length(FILE *fp, uint64_t *length) {

@@ -17,9 +17,9 @@ GCCFLAGS += -Os
 endif
 
 EXE = nTexts
-OBJS = main.o app.o app_language.o app_log.o text_engine.o reader_index.o storage.o crc32.o chapter_rules.o
+OBJS = main.o app.o app_language.o app_log.o text_engine.o reader_index.o storage.o crc32.o chapter_rules.o file_replace.o
 HOST_TEST = .build/tests/test_host
-HOST_TEST_SOURCES = tests/test_host.c tests/host_fakes.c crc32.c chapter_rules.c text_engine.c reader_index.c storage.c
+HOST_TEST_SOURCES = tests/test_host.c tests/host_fakes.c crc32.c chapter_rules.c file_replace.c text_engine.c reader_index.c storage.c
 
 all: $(EXE).tns
 

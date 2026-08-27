@@ -1,6 +1,17 @@
 #include <ngc.h>
+#include <errno.h>
+#include <stdio.h>
 #include <stdarg.h>
 
+int host_rename_calls;
+
+int rename(const char *old_path, const char *new_path) {
+    (void)old_path;
+    (void)new_path;
+    ++host_rename_calls;
+    errno = ENOSYS;
+    return -1;
+}
 void app_log(const char *tag, const char *fmt, ...) {
     (void)tag;
     (void)fmt;
