@@ -18,8 +18,9 @@
 
 #define SCREEN_W 320
 #define SCREEN_H 240
-#define MAX_ITEMS 160
-#define HOME_VISIBLE_RECENTS 5
+#define DIRECTORY_INITIAL_CAPACITY 32
+#define MAX_DIRECTORY_ITEMS 4096
+#define HOME_VISIBLE_ROWS 8
 #define FOOTER_Y 216
 
 typedef struct {
@@ -59,6 +60,7 @@ typedef struct {
 
 static scr_type_t screen_type = SCR_320x240_565;
 static DebugState debug_state;
+static int last_key_ctrl;
 
 static const Theme themes[] = {
     {0xffffff, 0x111111, 0x777777, 0x005bbb, 0xd8ebff, 0x000000},
@@ -232,28 +234,50 @@ static int cmp_items(const void *a, const void *b) {
     return strcmp(ia->name, ib->name);
 }
 
-static int load_dir(const char *dir, FileItem *items, int *count) {
+static int load_dir(const char *dir, FileItem **out_items, int *count) {
     DIR *dp = opendir(dir);
+    FileItem *items = NULL;
     struct dirent *de;
+    int capacity = 0;
+    *out_items = NULL;
     *count = 0;
     if (!dp) {
         debug_fail_errno("load_dir:opendir", dir);
         return 0;
     }
-    while ((de = readdir(dp)) && *count < MAX_ITEMS) {
+    while ((de = readdir(dp))) {
         char path[512];
         struct stat st;
+        FileItem *next;
+        int next_capacity;
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
         if (!join_path(path, sizeof(path), dir, de->d_name)) continue;
         if (stat(path, &st)) continue;
         if (!S_ISDIR(st.st_mode) && !has_txt_ext(de->d_name)) continue;
-        strncpy(items[*count].path, path, sizeof(items[*count].path) - 1);
-        strncpy(items[*count].name, de->d_name, sizeof(items[*count].name) - 1);
+        if (*count >= MAX_DIRECTORY_ITEMS) continue;
+        if (*count == capacity) {
+            next_capacity = capacity ? capacity * 2 : DIRECTORY_INITIAL_CAPACITY;
+            if (next_capacity > MAX_DIRECTORY_ITEMS) next_capacity = MAX_DIRECTORY_ITEMS;
+            next = realloc(items, (size_t)next_capacity * sizeof(*next));
+            if (!next) {
+                int saved_errno = errno ? errno : ENOMEM;
+                free(items);
+                closedir(dp);
+                errno = saved_errno;
+                debug_fail_errno("load_dir:realloc", dir);
+                return 0;
+            }
+            items = next;
+            capacity = next_capacity;
+        }
+        snprintf(items[*count].path, sizeof(items[*count].path), "%s", path);
+        snprintf(items[*count].name, sizeof(items[*count].name), "%s", de->d_name);
         items[*count].is_dir = S_ISDIR(st.st_mode);
         (*count)++;
     }
     closedir(dp);
-    qsort(items, *count, sizeof(items[0]), cmp_items);
+    if (*count > 1) qsort(items, (size_t)*count, sizeof(items[0]), cmp_items);
+    *out_items = items;
     return 1;
 }
 
@@ -263,6 +287,7 @@ static void wait_release(void) {
 
 static int wait_key(void) {
     for (;;) {
+        last_key_ctrl = isKeyPressed(KEY_NSPIRE_CTRL);
         if (isKeyPressed(KEY_NSPIRE_UP)) return 1;
         if (isKeyPressed(KEY_NSPIRE_DOWN)) return 2;
         if (isKeyPressed(KEY_NSPIRE_LEFT)) return 3;
@@ -312,7 +337,8 @@ static int progress_cb(uint32_t done, uint32_t total, void *ctx) {
     gui_gc_begin(r->gc);
     set_color(r->gc, themes[r->app->theme].bg);
     gui_gc_fillRect(r->gc, 0, 0, SCREEN_W, SCREEN_H);
-    snprintf(msg, sizeof(msg), "首次索引: %lu%%  Esc取消", total ? (unsigned long)(done * 100u / total) : 0ul);
+    snprintf(msg, sizeof(msg), "首次索引: %lu%%  Esc取消",
+             total ? (unsigned long)(((uint64_t)done * 100u) / total) : 0ul);
     draw_text(r->gc, msg, 42, 104, Regular10, themes[r->app->theme].fg);
     gui_gc_finish(r->gc);
     blit_gc(r->gc);
@@ -340,11 +366,18 @@ static int ensure_index(Reader *r) {
     return 1;
 }
 
-static void save_reader(Reader *r) {
+static int save_reader(Reader *r) {
     r->book.progress = r->top;
-    if (!storage_save_book(&r->book, r->data_dir))
+    if (!storage_save_book(&r->book, r->data_dir)) {
         debug_fail_errno("save_reader:book", r->book.path);
+        return 0;
+    }
     storage_touch_recent(r->app, &r->book);
+    return 1;
+}
+
+static void save_reader_all(Reader *r) {
+    save_reader(r);
     if (!storage_save_app(r->app, r->data_dir))
         debug_fail_errno("save_reader:app", r->data_dir);
 }
@@ -386,7 +419,7 @@ static void draw_page(Reader *r) {
         if (ch == '\t') ch = ' ';
         if (ch < 32) continue;
         cw = gui_gc_getCharWidth(r->gc, (gui_gc_Font)r->layout.font_size, (short)ch);
-        if (cw <= 0) cw = 10;
+        if (cw <= 0) cw = r->layout.font_size & 31;
         if (len && width + cw > maxw) {
             linebuf[len] = 0;
             wrap_push(lines, lens, starts, &line, linebuf, len, line_start);
@@ -625,59 +658,9 @@ static int request_u16_input(const char *title, const char *message, const uint1
 static int query_from_user(Reader *r, uint16_t *query) {
     static const uint16_t empty[1] = {0};
     const uint16_t *initial = r->app->history_count ? r->app->history[0] : empty;
-    if (request_u16_input("搜索", "输入搜索词", initial, query, QUERY_LEN)) return 1;
-    if (r->app->history_count) {
-        memcpy(query, r->app->history[0], sizeof(r->app->history[0]));
-        return query[0] != 0;
-    }
-    return 0;
+    return request_u16_input("搜索", "输入搜索词", initial, query, QUERY_LEN);
 }
 
-static int match_char(uint16_t a, uint16_t b) {
-    if (a < 128 && b < 128) return text_fold_ascii(a) == text_fold_ascii(b);
-    return a == b;
-}
-
-static int search_forward(Reader *r, const uint16_t *query, uint32_t from, TextPosition *hit) {
-    TextDecoder d;
-    uint16_t ring[QUERY_LEN], ch;
-    uint32_t offs[QUERY_LEN], off, qlen = 0, seen = 0;
-    while (qlen < QUERY_LEN && query[qlen]) qlen++;
-    if (!qlen) return 0;
-    text_decoder_at(&r->text, &d, (TextPosition){from, 1});
-    while (text_next(&d, &ch, &off)) {
-        ring[seen % qlen] = ch;
-        offs[seen % qlen] = off;
-        seen++;
-        if (seen >= qlen) {
-            uint32_t i;
-            for (i = 0; i < qlen; ++i) {
-                uint32_t idx = (seen - qlen + i) % qlen;
-                if (!match_char(ring[idx], query[i])) break;
-            }
-            if (i == qlen) {
-                hit->byte_offset = offs[(seen - qlen) % qlen];
-                hit->source_line = d.line;
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-static uint32_t next_char_offset(Reader *r, TextPosition pos);
-
-static int search_backward(Reader *r, const uint16_t *query, uint32_t before, TextPosition *hit) {
-    TextPosition found;
-    uint32_t from = r->text.data_start;
-    int ok = 0;
-    while (search_forward(r, query, from, &found) && found.byte_offset < before) {
-        *hit = found;
-        from = next_char_offset(r, found);
-        ok = 1;
-    }
-    return ok;
-}
 
 static uint32_t next_char_offset(Reader *r, TextPosition pos) {
     TextDecoder d;
@@ -689,32 +672,40 @@ static uint32_t next_char_offset(Reader *r, TextPosition pos) {
 }
 
 static int do_search(Reader *r, int direction, int reuse) {
-    TextPosition hit;
+    uint32_t hit;
     uint16_t query[QUERY_LEN];
     uint32_t anchor;
     int continuing;
     memcpy(query, r->last_query, sizeof(query));
+    if (reuse && !query[0] && r->app->history_count)
+        memcpy(query, r->app->history[0], sizeof(query));
     if (!reuse && !query_from_user(r, query)) return 0;
+    if (!query[0]) return 0;
     memcpy(r->last_query, query, sizeof(r->last_query));
-    storage_add_history(r->app, query);
-    storage_save_app(r->app, r->data_dir);
+    if (!reuse) {
+        storage_add_history(r->app, query);
+        if (!storage_save_app(r->app, r->data_dir))
+            debug_fail_errno("do_search:save_history", r->data_dir);
+    }
     continuing = reuse && r->hit_offset;
     if (direction >= 0) {
-        anchor = continuing ? r->hit_offset : r->top.byte_offset;
-        if (!search_forward(r, query, next_char_offset(r, (TextPosition){anchor, r->top.source_line}), &hit)) {
+        uint32_t from = continuing ?
+            next_char_offset(r, (TextPosition){r->hit_offset, r->top.source_line}) :
+            r->top.byte_offset;
+        if (!text_find_forward(&r->text, query, from, &hit)) {
             app_message(r->gc, r->app, "搜索", continuing ? TXT_SEARCH_NO_NEXT : TXT_SEARCH_NOT_FOUND);
             return 0;
         }
     } else {
         anchor = continuing ? r->hit_offset : r->top.byte_offset;
-        if (!search_backward(r, query, anchor, &hit)) {
+        if (!text_find_backward(&r->text, query, anchor, &hit)) {
             app_message(r->gc, r->app, "搜索", continuing ? TXT_SEARCH_NO_PREV : TXT_SEARCH_NOT_FOUND);
             return 0;
         }
     }
-    r->hit_offset = hit.byte_offset;
+    r->hit_offset = hit;
     r->search_active = 1;
-    reader_goto(r, index_position_for_offset(&r->index, hit.byte_offset));
+    reader_goto(r, index_position_for_offset(&r->index, hit));
     return 1;
 }
 
@@ -752,12 +743,20 @@ static void do_jump(Reader *r) {
         do_chapter_jump(r);
     }
 }
-
 static int apply_setting_change(Reader *r, AppState *app, const char *data_dir, int pick, int delta) {
+    int old_font = app->font_choice;
+    int old_theme = app->theme;
+    int old_margin = app->margin_choice;
     if (pick == 0) app->font_choice = (app->font_choice + delta + 3) % 3;
     else if (pick == 1) app->theme = (app->theme + delta + 3) % 3;
     else app->margin_choice = app->margin_choice ? 0 : 1;
-    storage_save_app(app, data_dir);
+    if (!storage_save_app(app, data_dir)) {
+        app->font_choice = old_font;
+        app->theme = old_theme;
+        app->margin_choice = old_margin;
+        debug_fail_errno("apply_setting_change:save", data_dir);
+        return -1;
+    }
     if (r) {
         uint32_t pct = percent_for_reader(r);
         r->layout = layout_from_state(r->gc, r->app);
@@ -823,7 +822,7 @@ static void about_page(Gc gc, AppState *app) {
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
         draw_text(gc, "关于 nTexts", 10, 8, Bold12, t->fg);
         draw_text(gc, "nTexts 中文阅读器", 10, 48, Regular10, t->fg);
-        draw_text(gc, "版本: v.0.0 Alpha", 10, 78, Regular10, t->fg);
+        draw_text(gc, "版本: Beta Testing v0.0.1", 10, 78, Regular10, t->fg);
         draw_text(gc, "作者: Ziyang-Bai", 10, 108, Regular10, t->fg);
         draw_text(gc, "Copyright (c) 2026 Ziyang-Bai", 10, 140, Regular9, t->fg);
         draw_text(gc, "License: GNU GPL v3.0", 10, 160, Regular9, t->fg);
@@ -1142,13 +1141,18 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
         blit_gc(gc);
 
         key = wait_key();
-        ctrl = isKeyPressed(KEY_NSPIRE_CTRL);
+        ctrl = last_key_ctrl;
         wait_release();
         app_log("tutorial", "key step=%d got=%d ctrl=%d expect=%d need_ctrl=%d",
                 i + 1, key, ctrl, step->key, step->need_ctrl);
         if (key == 12 && step->key != 12) {
+            uint32_t old_flags = app->tutorial_flags;
             app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
-            storage_save_app(app, data_dir);
+            if (!storage_save_app(app, data_dir)) {
+                app->tutorial_flags = old_flags;
+                debug_fail_errno("tutorial_center_page:skip", data_dir);
+                return;
+            }
             app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
             return;
         }
@@ -1166,8 +1170,13 @@ static int run_settings_item(Gc gc, AppState *app, const char *data_dir, Reader 
     if (selection == 4) about_page(gc, app);
     else if (selection == 5) usage_page(gc, app);
     else {
+        uint32_t old_flags = app->tutorial_flags;
         app->tutorial_flags = 0;
-        storage_save_app(app, data_dir);
+        if (!storage_save_app(app, data_dir)) {
+            app->tutorial_flags = old_flags;
+            debug_fail_errno("run_settings_item:reset_tutorial", data_dir);
+            return -1;
+        }
         app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_RESET_DONE);
     }
     return 1;
@@ -1320,6 +1329,8 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
         app_log("reader", "open text failed");
         return 0;
     }
+    if (strcmp(path, r.text.path))
+        storage_remove_recent(app, path);
     storage_load_book(&r.book, &r.text, data_dir);
     r.layout = layout_from_state(gc, app);
     if (!ensure_index(&r)) {
@@ -1332,16 +1343,17 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
     app_log("reader", "loop begin page_count=%lu start_offset=%lu",
             (unsigned long)r.index.page_count, (unsigned long)r.top.byte_offset);
     for (;;) {
+        TextPosition before;
         draw_page(&r);
-        key = wait_key(); wait_release();
+        key = wait_key();
+        wait_release();
+        before = r.top;
         if (r.search_active) {
             if (key == 5 || key == 2 || key == 9) {
-                do_search(&r, 1, 1);
-                save_reader(&r);
+                if (do_search(&r, 1, 1)) save_reader(&r);
                 continue;
             } else if (key == 1) {
-                do_search(&r, -1, 1);
-                save_reader(&r);
+                if (do_search(&r, -1, 1)) save_reader(&r);
                 continue;
             } else if (key == 6) {
                 r.search_active = 0;
@@ -1354,8 +1366,8 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
         r.hit_offset = 0;
         if (key == 4 && r.page + 1 < r.index.page_count) reader_goto_page(&r, r.page + 1);
         else if (key == 3 && r.page > 0) reader_goto_page(&r, r.page - 1);
-        else if (key == 1 && isKeyPressed(KEY_NSPIRE_CTRL)) reader_goto_page(&r, 0);
-        else if (key == 2 && isKeyPressed(KEY_NSPIRE_CTRL)) reader_goto_page(&r, r.index.page_count - 1);
+        else if (key == 1 && last_key_ctrl) reader_goto_page(&r, 0);
+        else if (key == 2 && last_key_ctrl) reader_goto_page(&r, r.index.page_count - 1);
         else if (key == 2 && r.top.source_line < r.index.total_source_lines) reader_goto(&r, position_for_line_exact(&r, r.top.source_line + 1));
         else if (key == 1 && r.top.source_line > 1) reader_goto(&r, position_for_line_exact(&r, r.top.source_line - 1));
         else if (key == 8) add_bookmark(&r);
@@ -1365,62 +1377,55 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
             menu_res = reader_menu(&r);
             if (menu_res < 0) break;
         } else if (key == 6) break;
-        save_reader(&r);
+        if (r.top.byte_offset != before.byte_offset || r.top.source_line != before.source_line)
+            save_reader(&r);
     }
-    save_reader(&r);
+    save_reader_all(&r);
     index_free(&r.index);
     text_close(&r.text);
     app_log("reader", "open end");
     return 1;
 }
 
-static void draw_home(Gc gc, AppState *app, int sel) {
+static void draw_home(Gc gc, AppState *app, int sel, int top) {
     const Theme *t = &themes[app->theme];
-    char line[128];
-    int shown_recents = (int)app->recent_count > HOME_VISIBLE_RECENTS ? HOME_VISIBLE_RECENTS : (int)app->recent_count;
-    int total = shown_recents + 2;
-    int draw_sel = sel;
-    int shortcut_base_y;
+    char line[160];
+    int recent_count = app->recent_count > MAX_RECENTS ? MAX_RECENTS : (int)app->recent_count;
+    int total = recent_count + 2;
     static int logged_once = 0;
+    if (sel >= total) sel = total - 1;
+    if (sel < 0) sel = 0;
+    if (top > sel) top = sel;
+    if (top + HOME_VISIBLE_ROWS <= sel) top = sel - HOME_VISIBLE_ROWS + 1;
     if (!logged_once) app_log("home", "draw begin recents=%lu sel=%d theme=%d",
                               (unsigned long)app->recent_count, sel, app->theme);
-    if (draw_sel >= total) draw_sel = total - 1;
-    if (draw_sel < 0) draw_sel = 0;
-    shortcut_base_y = shown_recents ? 54 + shown_recents * 20 + 10 : 92;
-    if (!logged_once) app_log("home", "gc begin");
     gui_gc_begin(gc);
-    if (!logged_once) app_log("home", "fill bg");
     set_color(gc, t->bg);
     gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
-    if (!logged_once) app_log("home", "draw title");
     draw_text(gc, "nTexts 中文阅读器", 8, 6, Bold12, t->fg);
-    draw_text(gc, "最近阅读", 8, 32, Bold10, t->fg);
-    for (int i = 0; i < shown_recents; ++i) {
-        int y = 54 + i * 20;
-        if (i == draw_sel) {
+    draw_text(gc, recent_count ? "最近阅读" : "暂无最近阅读", 8, 30, Bold10,
+              recent_count ? t->fg : t->muted);
+    for (int i = 0; i < HOME_VISIBLE_ROWS && top + i < total; ++i) {
+        int row = top + i;
+        int y = 52 + i * 20;
+        if (row == sel) {
             set_color(gc, t->highlight_bg);
             gui_gc_fillRect(gc, 4, y - 2, SCREEN_W - 8, 19);
         }
-        snprintf(line, sizeof(line), "%d. %s  %lu%%", i + 1, base_name(app->recents[i].path),
-                 app->recents[i].file_size ? (unsigned long)(app->recents[i].offset * 100u / app->recents[i].file_size) : 0ul);
-        draw_text(gc, line, 10, y, Regular10, i == draw_sel ? t->highlight_fg : t->fg);
-    }
-    if (!app->recent_count) draw_text(gc, "暂无最近阅读", 10, 58, Regular10, t->muted);
-    for (int i = 0; i < 2; ++i) {
-        int idx = shown_recents + i;
-        int y = shortcut_base_y + i * 20;
-        const char *label = i == 0 ? TXT_HOME_BROWSE_DOCS : TXT_SETTINGS;
-        if (idx == draw_sel) {
-            set_color(gc, t->highlight_bg);
-            gui_gc_fillRect(gc, 4, y - 2, SCREEN_W - 8, 19);
+        if (row < recent_count) {
+            unsigned long percent = app->recents[row].file_size ?
+                (unsigned long)(((uint64_t)app->recents[row].offset * 100u) /
+                                app->recents[row].file_size) : 0ul;
+            snprintf(line, sizeof(line), "%d. %s  %lu%%", row + 1,
+                     base_name(app->recents[row].path), percent);
+        } else {
+            snprintf(line, sizeof(line), "%s",
+                     row == recent_count ? TXT_HOME_BROWSE_DOCS : TXT_SETTINGS);
         }
-        snprintf(line, sizeof(line), "%s", label);
-        draw_text(gc, line, 10, y, Regular10, idx == draw_sel ? t->highlight_fg : t->fg);
+        draw_text(gc, line, 10, y, Regular10, row == sel ? t->highlight_fg : t->fg);
     }
     draw_text(gc, TXT_FOOTER_HOME, 8, FOOTER_Y, Regular9, t->muted);
-    if (!logged_once) app_log("home", "finish");
     gui_gc_finish(gc);
-    if (!logged_once) app_log("home", "blit");
     blit_gc(gc);
     if (!logged_once) {
         app_log("home", "draw ok");
@@ -1429,16 +1434,27 @@ static void draw_home(Gc gc, AppState *app, int sel) {
 }
 
 static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
-    char cwd[512];
-    FileItem items[MAX_ITEMS];
-    int count = 0, sel = 0, top = 0, visible = 9;
+    const char *documents = get_documents_dir();
     const Theme *t = &themes[app->theme];
-    snprintf(cwd, sizeof(cwd), "%s", get_documents_dir());
+    char cwd[512];
+    FileItem *items = NULL;
+    int count = 0, sel = 0, top = 0, visible = 9;
+    int reload = 1;
+    if (!documents || !*documents || !out || !outcap) {
+        errno = EINVAL;
+        return 0;
+    }
+    snprintf(cwd, sizeof(cwd), "%s", documents);
     for (;;) {
         int key;
-        if (!load_dir(cwd, items, &count)) return 0;
-        if (sel >= count) sel = count ? count - 1 : 0;
-        if (top > sel) top = sel;
+        if (reload) {
+            free(items);
+            items = NULL;
+            if (!load_dir(cwd, &items, &count)) return 0;
+            reload = 0;
+            if (sel >= count) sel = count ? count - 1 : 0;
+            if (top > sel) top = sel;
+        }
         gui_gc_begin(gc);
         set_color(gc, t->bg);
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
@@ -1450,13 +1466,16 @@ static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
                 set_color(gc, t->highlight_bg);
                 gui_gc_fillRect(gc, 4, y - 2, SCREEN_W - 8, 20);
             }
-            snprintf(label, sizeof(label), "%s%s", items[top + i].is_dir ? "[目录] " : "", items[top + i].name);
-            draw_text(gc, label, 10, y, Regular10, top + i == sel ? t->highlight_fg : t->fg);
+            snprintf(label, sizeof(label), "%s%s",
+                     items[top + i].is_dir ? "[目录] " : "", items[top + i].name);
+            draw_text(gc, label, 10, y, Regular10,
+                      top + i == sel ? t->highlight_fg : t->fg);
         }
         draw_text(gc, TXT_FOOTER_BROWSER, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         blit_gc(gc);
-        key = wait_key(); wait_release();
+        key = wait_key();
+        wait_release();
         if (key == 1) {
             sel = count ? (sel > 0 ? sel - 1 : count - 1) : 0;
             if (sel < top) top = sel;
@@ -1465,14 +1484,26 @@ static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
             sel = count ? (sel + 1 < count ? sel + 1 : 0) : 0;
             if (sel >= top + visible) top = sel - visible + 1;
             if (sel < top) top = sel;
-        }
-        else if (key == 5 && count) {
-            if (items[sel].is_dir) { strncpy(cwd, items[sel].path, sizeof(cwd) - 1); sel = top = 0; }
-            else { strncpy(out, items[sel].path, outcap - 1); return 1; }
+        } else if (key == 5 && count) {
+            if (items[sel].is_dir) {
+                snprintf(cwd, sizeof(cwd), "%s", items[sel].path);
+                sel = top = 0;
+                reload = 1;
+            } else {
+                snprintf(out, outcap, "%s", items[sel].path);
+                free(items);
+                return 1;
+            }
         } else if (key == 6) {
             char *slash = strrchr(cwd, '/');
-            if (slash && strcmp(cwd, get_documents_dir())) { *slash = 0; sel = top = 0; }
-            else return 0;
+            if (slash && strcmp(cwd, documents)) {
+                *slash = 0;
+                sel = top = 0;
+                reload = 1;
+            } else {
+                free(items);
+                return 0;
+            }
         }
     }
 }
@@ -1484,7 +1515,11 @@ static void run_tutorial_if_needed(Gc gc, AppState *app, const char *data_dir) {
     tutorial_center_page(gc, app, data_dir);
     if (app->tutorial_flags & TUTORIAL_ALL_SKIPPED) return;
     app->tutorial_flags |= TUTORIAL_READER_SEEN;
-    storage_save_app(app, data_dir);
+    if (!storage_save_app(app, data_dir)) {
+        app->tutorial_flags &= ~TUTORIAL_READER_SEEN;
+        debug_fail_errno("run_tutorial_if_needed:save", data_dir);
+        return;
+    }
     app_log("tutorial", "done");
 }
 
@@ -1493,6 +1528,7 @@ int ntexts_app_main(int argc, char **argv) {
     AppState app;
     char data_dir[512], selected[512];
     int sel = 0;
+    int home_top = 0;
     app_log("startup", "enter argc=%d", argc);
     enable_relative_paths(argv);
     storage_app_defaults(&app);
@@ -1504,9 +1540,18 @@ int ntexts_app_main(int argc, char **argv) {
     gc = gui_gc_global_GC();
     debug_set_runtime(gc, &app);
     app_log("startup", "graphics ready gc=%p", gc);
-    if (!storage_init(data_dir, sizeof(data_dir))) debug_fail_errno("main:storage_init", data_dir[0] ? data_dir : "Documents/nTexts");
+    if (!storage_init(data_dir, sizeof(data_dir))) {
+        debug_fail_errno("main:storage_init", data_dir[0] ? data_dir : "Documents/nTexts");
+        lcd_init(SCR_TYPE_INVALID);
+        return 1;
+    }
     app_log("startup", "storage dir=%s", data_dir);
     storage_load_app(&app, data_dir);
+    if (storage_prune_recents(&app)) {
+        app_log("startup", "pruned invalid recents");
+        if (!storage_save_app(&app, data_dir))
+            debug_fail_errno("main:prune_recents", data_dir);
+    }
     app_log("startup", "app loaded recents=%lu history=%lu theme=%d",
             (unsigned long)app.recent_count, (unsigned long)app.history_count, app.theme);
     if (app.theme < 0 || app.theme > 2) app.theme = 0;
@@ -1521,46 +1566,61 @@ int ntexts_app_main(int argc, char **argv) {
     app_log("startup", "home loop begin");
     for (;;) {
         int key;
-        draw_home(gc, &app, sel);
-        key = wait_key(); wait_release();
-        {
-            int shown_recents = (int)app.recent_count > HOME_VISIBLE_RECENTS ? HOME_VISIBLE_RECENTS : (int)app.recent_count;
-            int total = shown_recents + 2;
-            if (key == 1) sel = sel > 0 ? sel - 1 : total - 1;
-            else if (key == 2) sel = sel + 1 < total ? sel + 1 : 0;
-            else if (key == 3 && sel == shown_recents + 1) settings_menu(gc, &app, data_dir, NULL);
-            else if (key == 4 && sel == shown_recents + 1) settings_menu(gc, &app, data_dir, NULL);
-            else if (key == 12) {
+        int recent_count;
+        int total;
+        draw_home(gc, &app, sel, home_top);
+        key = wait_key();
+        wait_release();
+        recent_count = app.recent_count > MAX_RECENTS ? MAX_RECENTS : (int)app.recent_count;
+        total = recent_count + 2;
+        if (key == 1) sel = sel > 0 ? sel - 1 : total - 1;
+        else if (key == 2) sel = sel + 1 < total ? sel + 1 : 0;
+        else if ((key == 3 || key == 4) && sel == recent_count + 1)
+            settings_menu(gc, &app, data_dir, NULL);
+        else if (key == 12) {
+            memset(selected, 0, sizeof(selected));
+            if (browse_files(gc, &app, selected, sizeof(selected))) {
+                open_reader(selected, gc, &app, data_dir);
+                sel = home_top = 0;
+            }
+        } else if (key == 13) {
+            settings_menu(gc, &app, data_dir, NULL);
+        } else if (key == 5) {
+            if (sel < recent_count) {
+                char recent_path[512];
+                snprintf(recent_path, sizeof(recent_path), "%s", app.recents[sel].path);
+                app_log("home", "open recent[%d]=%s", sel, recent_path);
+                if (!open_reader(recent_path, gc, &app, data_dir)) {
+                    storage_remove_recent(&app, recent_path);
+                    if (!storage_save_app(&app, data_dir))
+                        debug_fail_errno("main:remove_recent", recent_path);
+                }
+                sel = home_top = 0;
+            } else if (sel == recent_count) {
                 memset(selected, 0, sizeof(selected));
-                if (browse_files(gc, &app, selected, sizeof(selected))) open_reader(selected, gc, &app, data_dir);
-            } else if (key == 13) {
+                if (browse_files(gc, &app, selected, sizeof(selected))) {
+                    open_reader(selected, gc, &app, data_dir);
+                    sel = home_top = 0;
+                }
+            } else {
                 settings_menu(gc, &app, data_dir, NULL);
             }
-            else if (key == 5) {
-                if (sel < shown_recents) {
-                    char recent_path[512];
-                    snprintf(recent_path, sizeof(recent_path), "%s", app.recents[sel].path);
-                    app_log("home", "open recent[%d]=%s", sel, recent_path);
-                    if (!open_reader(recent_path, gc, &app, data_dir)) {
-                        storage_remove_recent(&app, recent_path);
-                        storage_save_app(&app, data_dir);
-                    }
-                }
-                else if (sel == shown_recents) {
-                    memset(selected, 0, sizeof(selected));
-                    if (browse_files(gc, &app, selected, sizeof(selected))) open_reader(selected, gc, &app, data_dir);
-                } else {
-                    settings_menu(gc, &app, data_dir, NULL);
-                }
-            } else if (key == 7) {
-                memset(selected, 0, sizeof(selected));
-                if (browse_files(gc, &app, selected, sizeof(selected))) open_reader(selected, gc, &app, data_dir);
-            } else if (key == 6) break;
-            if (sel >= total) sel = total - 1;
-            if (sel < 0) sel = 0;
-        }
+        } else if (key == 7) {
+            memset(selected, 0, sizeof(selected));
+            if (browse_files(gc, &app, selected, sizeof(selected))) {
+                open_reader(selected, gc, &app, data_dir);
+                sel = home_top = 0;
+            }
+        } else if (key == 6) break;
+        recent_count = app.recent_count > MAX_RECENTS ? MAX_RECENTS : (int)app.recent_count;
+        total = recent_count + 2;
+        if (sel >= total) sel = total - 1;
+        if (sel < 0) sel = 0;
+        if (home_top > sel) home_top = sel;
+        if (home_top + HOME_VISIBLE_ROWS <= sel) home_top = sel - HOME_VISIBLE_ROWS + 1;
     }
-    storage_save_app(&app, data_dir);
+    if (!storage_save_app(&app, data_dir))
+        debug_fail_errno("main:save_app", data_dir);
     lcd_init(SCR_TYPE_INVALID);
     app_log("shutdown", "normal exit");
     return 0;

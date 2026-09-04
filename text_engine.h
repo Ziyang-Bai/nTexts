@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#define TEXT_SEARCH_QUERY_MAX 64
 
 typedef enum {
     TEXT_UTF8 = 1,
@@ -40,6 +41,8 @@ int text_next(TextDecoder *decoder, uint16_t *value, uint32_t *char_offset);
 int text_utf8_valid_sample(FILE *fp, uint32_t start, uint32_t max_bytes);
 const char *text_encoding_name(TextEncoding encoding);
 uint16_t text_fold_ascii(uint16_t value);
+int text_find_forward(TextFile *text, const uint16_t *query, uint32_t from, uint32_t *hit_offset);
+int text_find_backward(TextFile *text, const uint16_t *query, uint32_t before, uint32_t *hit_offset);
 void text_make_excerpt(TextFile *text, TextPosition position, uint16_t *out, size_t capacity);
 
 #endif

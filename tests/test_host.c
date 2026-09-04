@@ -6,6 +6,7 @@
 #include "text_engine.h"
 
 #include <stdint.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,8 @@
 
 
 extern int host_rename_calls;
+extern int host_rename_errno;
+extern int host_char_width;
 static const char *test_directory;
 
 #define CHECK(condition) do { \
@@ -145,6 +148,7 @@ static int test_ndless_rename_fallback(void) {
     remove(path);
     remove(temporary);
     host_rename_calls = 0;
+    host_rename_errno = ENOSYS;
     part.data = first;
     part.size = sizeof(first);
     CHECK(file_replace_parts(path, &part, 1));
@@ -154,6 +158,7 @@ static int test_ndless_rename_fallback(void) {
     free(saved);
     CHECK(fopen(temporary, "rb") == NULL);
 
+    host_rename_errno = EEXIST;
     part.data = second;
     part.size = sizeof(second);
     CHECK(file_replace_parts(path, &part, 1));
@@ -162,6 +167,61 @@ static int test_ndless_rename_fallback(void) {
     CHECK(saved && saved_size == sizeof(second) && memcmp(saved, second, sizeof(second)) == 0);
     free(saved);
     CHECK(fopen(temporary, "rb") == NULL);
+    return 1;
+}
+
+static int test_canonical_path_persistence_identity(void) {
+    static const char content[] = "first line\nsecond line\nthird line";
+    AppState app;
+    BookState state;
+    BookState loaded_state;
+    ChapterRules rules;
+    PageIndex built;
+    PageIndex loaded_index;
+    TextFile direct;
+    TextFile aliased;
+    Layout layout = {10, 6, 8, 20};
+    char direct_path[600];
+    char alias_path[600];
+    char cache_path[600];
+
+    make_path(direct_path, sizeof(direct_path), "canonical-identity.txt");
+    snprintf(alias_path, sizeof(alias_path), "%s/./canonical-identity.txt", test_directory);
+    CHECK(write_bytes(direct_path, content, sizeof(content) - 1));
+    CHECK(text_open(&direct, direct_path));
+    CHECK(text_open(&aliased, alias_path));
+    CHECK(direct.path[0] == '/' && strcmp(direct.path, aliased.path) == 0);
+    CHECK(storage_hash_path(direct.path) == storage_hash_path(aliased.path));
+
+    storage_book_defaults(&state, &direct);
+    state.progress.byte_offset = 11;
+    state.progress.source_line = 2;
+    CHECK(storage_save_book(&state, test_directory));
+    CHECK(storage_load_book(&loaded_state, &aliased, test_directory));
+    CHECK(loaded_state.progress.byte_offset == 11 && loaded_state.progress.source_line == 2);
+
+    storage_app_defaults(&app);
+    storage_touch_recent(&app, &loaded_state);
+    CHECK(app.recent_count == 1 && strcmp(app.recents[0].path, direct.path) == 0);
+    CHECK(!storage_prune_recents(&app));
+    app.recent_count = 2;
+    snprintf(app.recents[1].path, sizeof(app.recents[1].path),
+             "%s/missing-recent.txt", test_directory);
+    app.recents[1].file_size = 1;
+    CHECK(storage_prune_recents(&app));
+    CHECK(app.recent_count == 1 && strcmp(app.recents[0].path, direct.path) == 0);
+
+    chapter_rules_defaults(&rules);
+    index_init(&built);
+    index_init(&loaded_index);
+    CHECK(index_build(&built, &direct, NULL, layout, &rules, NULL, NULL) == 1);
+    storage_book_path(cache_path, sizeof(cache_path), test_directory, direct.path, "idx");
+    CHECK(index_save(&built, cache_path));
+    CHECK(index_load(&loaded_index, &aliased, layout, &rules, cache_path));
+    index_free(&built);
+    index_free(&loaded_index);
+    text_close(&direct);
+    text_close(&aliased);
     return 1;
 }
 
@@ -380,16 +440,39 @@ static int test_app_state_integrity_and_v3_migration(void) {
     unsigned char *data;
     size_t size;
     struct stat st;
+    uint16_t empty_query[QUERY_LEN] = {0};
 
     make_path(path, sizeof(path), "app.state");
     remove(path);
     storage_app_defaults(&state);
+    storage_add_history(&state, empty_query);
+    CHECK(state.history_count == 0);
     state.theme = 2;
     state.history_count = 1;
     state.history[0][0] = 'x';
     CHECK(storage_save_app(&state, test_directory));
     CHECK(stat(path, &st) == 0 && st.st_size == 7288);
     CHECK(storage_load_app(&loaded, test_directory) && loaded.theme == 2);
+
+    invalid = state;
+    invalid.magic = 0;
+    invalid.version = 0;
+    invalid.theme = 99;
+    invalid.tutorial_flags = 0x7fffffffu;
+    invalid.recent_count = MAX_RECENTS + 1;
+    snprintf(invalid.recents[0].path, sizeof(invalid.recents[0].path), "%s", "recoverable.txt");
+    invalid.recents[0].offset = 9;
+    invalid.recents[0].file_size = 3;
+    invalid.history_count = MAX_HISTORY + 1;
+    memset(invalid.history[0], 'q', sizeof(invalid.history[0]));
+    invalid.chapter_rules.count = MAX_CHAPTER_PATTERNS + 1;
+    CHECK(storage_save_app(&invalid, test_directory));
+    CHECK(storage_load_app(&loaded, test_directory));
+    CHECK(loaded.magic == APP_MAGIC && loaded.version == 4 && loaded.theme == 0);
+    CHECK(loaded.tutorial_flags == TUTORIAL_READER_SEEN);
+    CHECK(loaded.recent_count == 1 && loaded.recents[0].offset == 3);
+    CHECK(loaded.history_count == 1 && loaded.history[0][QUERY_LEN - 1] == 0);
+    CHECK(chapter_rules_validate(&loaded.chapter_rules) && loaded.chapter_rules.count == 0);
 
     data = read_bytes(path, &size);
     CHECK(data && size == 7288);
@@ -604,6 +687,99 @@ static int test_index_corruption_recovery(void) {
     return 1;
 }
 
+static int test_streaming_search_boundaries_and_overlap(void) {
+    static const char content[] = "Alpha aaa ALPHA\nalpha";
+    uint16_t alpha[TEXT_SEARCH_QUERY_MAX];
+    uint16_t double_a[TEXT_SEARCH_QUERY_MAX];
+    TextFile text;
+    char path[600];
+    uint32_t hit = UINT32_MAX;
+
+    ascii_u16(alpha, TEXT_SEARCH_QUERY_MAX, "alpha");
+    ascii_u16(double_a, TEXT_SEARCH_QUERY_MAX, "aa");
+    make_path(path, sizeof(path), "search.txt");
+    CHECK(write_bytes(path, content, sizeof(content) - 1));
+    CHECK(text_open(&text, path));
+    CHECK(text_find_forward(&text, alpha, 0, &hit) && hit == 0);
+    CHECK(text_find_forward(&text, alpha, 1, &hit) && hit == 10);
+    CHECK(text_find_backward(&text, alpha, text.size, &hit) && hit == 16);
+    CHECK(text_find_backward(&text, alpha, 16, &hit) && hit == 10);
+    CHECK(text_find_forward(&text, double_a, 6, &hit) && hit == 6);
+    CHECK(text_find_forward(&text, double_a, 7, &hit) && hit == 7);
+    CHECK(text_find_backward(&text, double_a, 9, &hit) && hit == 7);
+    errno = 0;
+    CHECK(!text_find_forward(&text, NULL, 0, &hit) && errno == EINVAL);
+    text_close(&text);
+    return 1;
+}
+
+static int cancel_at_completion(uint32_t done, uint32_t total, void *context) {
+    int *calls = context;
+    ++*calls;
+    return done != total;
+}
+
+static int test_invalid_inputs_layout_and_index_identity(void) {
+    static const char content[] = "abcde";
+    FilePart invalid_part = {NULL, 1};
+    ChapterRules rules;
+    PageIndex built;
+    PageIndex loaded;
+    TextFile text;
+    Layout layout = {12, 150, 2, 28};
+    Layout invalid_layout = {12, 6, 0, 28};
+    char text_path[600];
+    char cache_path[600];
+    char original_path[sizeof(text.path)];
+    char long_path[600];
+    int progress_calls = 0;
+
+    errno = 0;
+    CHECK(!file_replace_parts("invalid-part.tmp", &invalid_part, 1) && errno == EINVAL);
+    errno = 0;
+    CHECK(!text_open(&text, NULL) && errno == EINVAL);
+    errno = 0;
+    CHECK(!text_open(&text, test_directory) && errno == EINVAL);
+    memset(long_path, 'x', sizeof(long_path));
+    long_path[sizeof(long_path) - 1] = 0;
+    errno = 0;
+    CHECK(!text_open(&text, long_path) && errno == ENAMETOOLONG);
+
+    make_path(text_path, sizeof(text_path), "index-identity.txt");
+    make_path(cache_path, sizeof(cache_path), "index-identity.idx");
+    CHECK(write_bytes(text_path, content, sizeof(content) - 1));
+    CHECK(text_open(&text, text_path));
+    chapter_rules_defaults(&rules);
+    index_init(&built);
+    index_init(&loaded);
+    errno = 0;
+    CHECK(!index_build(&built, &text, NULL, invalid_layout, &rules, NULL, NULL));
+    CHECK(errno == EINVAL);
+    CHECK(index_build(&built, &text, NULL, layout, &rules,
+                      cancel_at_completion, &progress_calls) == -1);
+    CHECK(progress_calls == 1);
+
+    host_char_width = -1;
+    CHECK(index_build(&built, &text, NULL, layout, &rules, NULL, NULL) == 1);
+    host_char_width = 8;
+    CHECK(built.page_count == 3);
+    CHECK(strcmp(built.file_path, text.path) == 0);
+    remove(cache_path);
+    CHECK(index_save(&built, cache_path));
+
+    snprintf(original_path, sizeof(original_path), "%s", text.path);
+    snprintf(text.path, sizeof(text.path), "%s", "different-book-with-same-cache-key.txt");
+    CHECK(!index_load(&loaded, &text, layout, &rules, cache_path));
+    CHECK(loaded.page_count == 0);
+    snprintf(text.path, sizeof(text.path), "%s", original_path);
+    CHECK(index_load(&loaded, &text, layout, &rules, cache_path));
+
+    index_free(&built);
+    index_free(&loaded);
+    text_close(&text);
+    return 1;
+}
+
 typedef int (*TestFunction)(void);
 
 typedef struct {
@@ -615,12 +791,15 @@ int main(int argc, char **argv) {
     static const TestCase tests[] = {
         {"test_crc32_known_vector", test_crc32_known_vector},
         {"test_ndless_rename_fallback", test_ndless_rename_fallback},
+        {"test_canonical_path_persistence_identity", test_canonical_path_persistence_identity},
         {"test_utf16_decoding_and_positions", test_utf16_decoding_and_positions},
         {"test_chapter_rules_and_index_round_trip", test_chapter_rules_and_index_round_trip},
         {"test_bookmark_excerpt", test_bookmark_excerpt},
         {"test_app_state_integrity_and_v3_migration", test_app_state_integrity_and_v3_migration},
         {"test_book_state_integrity_encoding_and_v3_migration", test_book_state_integrity_encoding_and_v3_migration},
-        {"test_index_corruption_recovery", test_index_corruption_recovery}
+        {"test_index_corruption_recovery", test_index_corruption_recovery},
+        {"test_streaming_search_boundaries_and_overlap", test_streaming_search_boundaries_and_overlap},
+        {"test_invalid_inputs_layout_and_index_identity", test_invalid_inputs_layout_and_index_identity},
     };
     size_t i;
     if (argc != 2) {
@@ -634,6 +813,7 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    puts("8 host behavioral tests passed");
+    printf("%lu host behavioral tests passed\n",
+           (unsigned long)(sizeof(tests) / sizeof(tests[0])));
     return 0;
 }

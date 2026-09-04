@@ -53,10 +53,17 @@ int file_replace_parts(const char *path, const FilePart *parts, size_t count) {
     int rename_errno;
     int result;
 
+    size_t i;
     if (!path || !parts || !count ||
         snprintf(temporary, sizeof(temporary), "%s.tmp", path) >= (int)sizeof(temporary)) {
         errno = EINVAL;
         return 0;
+    }
+    for (i = 0; i < count; ++i) {
+        if (parts[i].size && !parts[i].data) {
+            errno = EINVAL;
+            return 0;
+        }
     }
     if (!write_parts(temporary, parts, count)) {
         int saved_errno = errno;
@@ -65,13 +72,6 @@ int file_replace_parts(const char *path, const FilePart *parts, size_t count) {
         return 0;
     }
     if (rename(temporary, path) == 0) return 1;
-    rename_errno = errno;
-    if (rename_errno != ENOSYS) {
-        remove(temporary);
-        errno = rename_errno;
-        return 0;
-    }
-
     errno = 0;
     result = copy_file(temporary, path);
     if (!result && !errno) errno = EIO;

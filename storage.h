@@ -9,7 +9,7 @@
 #define MAX_RECENTS 10
 #define MAX_HISTORY 10
 #define EXCERPT_LEN 48
-#define QUERY_LEN 64
+#define QUERY_LEN TEXT_SEARCH_QUERY_MAX
 
 typedef struct {
     TextPosition position;

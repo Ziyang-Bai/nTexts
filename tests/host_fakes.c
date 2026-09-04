@@ -4,12 +4,14 @@
 #include <stdarg.h>
 
 int host_rename_calls;
+int host_rename_errno = ENOSYS;
+int host_char_width = 8;
 
 int rename(const char *old_path, const char *new_path) {
     (void)old_path;
     (void)new_path;
     ++host_rename_calls;
-    errno = ENOSYS;
+    errno = host_rename_errno;
     return -1;
 }
 void app_log(const char *tag, const char *fmt, ...) {
@@ -21,7 +23,7 @@ int gui_gc_getCharWidth(Gc gc, gui_gc_Font font, short value) {
     (void)gc;
     (void)font;
     (void)value;
-    return 8;
+    return host_char_width;
 }
 
 const char *get_documents_dir(void) {

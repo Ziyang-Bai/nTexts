@@ -37,6 +37,7 @@ typedef struct {
     uint32_t file_size;
     uint32_t file_mtime;
     TextEncoding encoding;
+    char file_path[512];
     Layout layout;
 } PageIndex;
 

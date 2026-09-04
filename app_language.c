@@ -74,7 +74,7 @@ int draw_wrapped_text(Gc gc, const char *text, int x, int y, int width, gui_gc_F
             continue;
         }
         cw = gui_gc_getCharWidth(gc, font, (short)utf16[i]);
-        if (cw <= 0) cw = 10;
+        if (cw <= 0) cw = (int)font & 31;
         if (line_len && line_width + cw > width) {
             line[line_len] = 0;
             draw_u16(gc, line, x, draw_y, font, color);

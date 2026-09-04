@@ -46,8 +46,8 @@ TI-Nspire CX / CX II 的轻量纯文本阅读器，使用 Ndless SDK 构建。
 
 ## 构建
 
-仓库提供了 WSL 构建脚本，会自动定位默认安装在
-`$HOME/Ndless/ndless-sdk` 的 SDK，并兼容 SDK 与 WSL 中 Boost SONAME 不一致的问题：
+仓库提供了 WSL 构建脚本，会优先使用 `NDLESS_SDK`，其次检查
+`$HOME/Ndless/ndless-sdk`，最后从 `PATH` 中的 `nspire-gcc` 定位 SDK；脚本同时兼容 SDK 与 WSL 中 Boost SONAME 不一致的问题：
 
 ```sh
 chmod +x tools/build-wsl.sh

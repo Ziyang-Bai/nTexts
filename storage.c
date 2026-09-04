@@ -125,6 +125,46 @@ static int app_valid(const AppState *state) {
            state->version == STATE_VERSION && chapter_rules_validate(&state->chapter_rules);
 }
 
+static void repair_app(AppState *state) {
+    uint32_t read;
+    uint32_t write = 0;
+
+    state->magic = APP_MAGIC;
+    state->version = STATE_VERSION;
+    if (state->font_choice < 0 || state->font_choice > 2) state->font_choice = 1;
+    if (state->theme < 0 || state->theme > 2) state->theme = 0;
+    if (state->margin_choice < 0 || state->margin_choice > 1) state->margin_choice = 0;
+    state->tutorial_flags &= TUTORIAL_READER_SEEN | TUTORIAL_ALL_SKIPPED;
+
+    if (state->recent_count > MAX_RECENTS) state->recent_count = MAX_RECENTS;
+    for (read = 0; read < state->recent_count; ++read) {
+        RecentBook recent = state->recents[read];
+        recent.path[sizeof(recent.path) - 1] = 0;
+        if (!recent.path[0]) continue;
+        if (recent.offset > recent.file_size) recent.offset = recent.file_size;
+        state->recents[write++] = recent;
+    }
+    state->recent_count = write;
+    while (write < MAX_RECENTS)
+        memset(&state->recents[write++], 0, sizeof(state->recents[0]));
+
+    write = 0;
+    if (state->history_count > MAX_HISTORY) state->history_count = MAX_HISTORY;
+    for (read = 0; read < state->history_count; ++read) {
+        state->history[read][QUERY_LEN - 1] = 0;
+        if (!state->history[read][0]) continue;
+        if (write != read)
+            memcpy(state->history[write], state->history[read], sizeof(state->history[0]));
+        ++write;
+    }
+    state->history_count = write;
+    while (write < MAX_HISTORY)
+        memset(state->history[write++], 0, sizeof(state->history[0]));
+
+    if (!chapter_rules_validate(&state->chapter_rules))
+        chapter_rules_defaults(&state->chapter_rules);
+}
+
 static int legacy_app_valid(const LegacyAppState *state) {
     return state->version == LEGACY_STATE_VERSION &&
            app_common_valid(state->magic, state->version, state->font_choice, state->theme,
@@ -274,13 +314,24 @@ int storage_load_app(AppState *state, const char *directory) {
 }
 
 int storage_save_app(const AppState *state, const char *directory) {
+    AppState candidate;
     char path[600];
-    if (!app_valid(state)) {
+    if (!state || !directory || !*directory) {
+        errno = EINVAL;
+        return 0;
+    }
+    candidate = *state;
+    if (!app_valid(&candidate)) {
+        app_log("storage", "repair app before save");
+        repair_app(&candidate);
+    }
+    if (!app_valid(&candidate)) {
+        errno = EINVAL;
         app_log("storage", "save app fields");
         return 0;
     }
     snprintf(path, sizeof(path), "%s/app.state", directory);
-    return atomic_write(path, state, sizeof(*state));
+    return atomic_write(path, &candidate, sizeof(candidate));
 }
 
 void storage_book_defaults(BookState *state, TextFile *text) {
@@ -395,6 +446,7 @@ int storage_load_book(BookState *state, TextFile *text, const char *directory) {
 int storage_save_book(const BookState *state, const char *directory) {
     char path[600];
     if (!book_valid(state)) {
+        errno = EINVAL;
         app_log("storage", "save book fields");
         return 0;
     }
@@ -467,7 +519,9 @@ int storage_prune_recents(AppState *state) {
 }
 
 void storage_add_history(AppState *state, const uint16_t *query) {
-    uint32_t i, found = state->history_count;
+    uint32_t i, found;
+    if (!state || !query || !query[0]) return;
+    found = state->history_count;
     for (i = 0; i < state->history_count; ++i)
         if (!memcmp(state->history[i], query, QUERY_LEN * sizeof(uint16_t))) { found = i; break; }
     if (found >= MAX_HISTORY) found = MAX_HISTORY - 1;

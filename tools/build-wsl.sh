@@ -3,8 +3,15 @@ set -eu
 
 SDK="${NDLESS_SDK:-$HOME/Ndless/ndless-sdk}"
 if [ ! -x "$SDK/bin/nspire-gcc" ]; then
+    compiler=$(command -v nspire-gcc 2>/dev/null || true)
+    if [ -x "${compiler:-}" ]; then
+        compiler=$(readlink -f "$compiler")
+        SDK=${compiler%/bin/nspire-gcc}
+    fi
+fi
+if [ ! -x "$SDK/bin/nspire-gcc" ]; then
     echo "Ndless SDK not found at: $SDK" >&2
-    echo "Set NDLESS_SDK to the ndless-sdk directory." >&2
+    echo "Set NDLESS_SDK or put nspire-gcc on PATH." >&2
     exit 1
 fi
 

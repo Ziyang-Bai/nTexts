@@ -1,7 +1,9 @@
 #include "text_engine.h"
 #include "app_log.h"
 #include "gb18030_table.h"
+#include <errno.h>
 #include <string.h>
+#include <unistd.h>
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
@@ -29,7 +31,7 @@ static uint16_t gb_range_lookup(unsigned pointer) {
 int text_utf8_valid_sample(FILE *fp, uint32_t start, uint32_t max_bytes) {
     uint32_t read = 0;
     int c;
-    fseek(fp, start, SEEK_SET);
+    if (fseek(fp, start, SEEK_SET) != 0) return 0;
     while (read < max_bytes && (c = fgetc(fp)) != EOF) {
         int need = 0, i;
         unsigned value, min;
@@ -49,24 +51,102 @@ int text_utf8_valid_sample(FILE *fp, uint32_t start, uint32_t max_bytes) {
     return 1;
 }
 
+static int path_separator(char value) {
+    return value == '/' || value == '\\';
+}
+
+static int normalize_path(char out[512], const char *path) {
+    char cwd[512];
+    char joined[1024];
+    const char *cursor;
+    size_t written = 1;
+    int length;
+
+    if (path_separator(path[0])) {
+        length = snprintf(joined, sizeof(joined), "%s", path);
+    } else {
+        if (!getcwd(cwd, sizeof(cwd))) return 0;
+        length = snprintf(joined, sizeof(joined), "%s/%s", cwd, path);
+    }
+    if (length < 0 || (size_t)length >= sizeof(joined)) {
+        errno = ENAMETOOLONG;
+        return 0;
+    }
+
+    out[0] = '/';
+    out[1] = 0;
+    cursor = joined;
+    while (*cursor) {
+        const char *component;
+        size_t component_length;
+        while (path_separator(*cursor)) ++cursor;
+        if (!*cursor) break;
+        component = cursor;
+        while (*cursor && !path_separator(*cursor)) ++cursor;
+        component_length = (size_t)(cursor - component);
+        if (component_length == 1 && component[0] == '.') continue;
+        if (component_length == 2 && component[0] == '.' && component[1] == '.') {
+            while (written > 1 && out[written - 1] != '/') --written;
+            if (written > 1) --written;
+            out[written] = 0;
+            continue;
+        }
+        if (written > 1) {
+            if (written + 1 >= 512) {
+                errno = ENAMETOOLONG;
+                return 0;
+            }
+            out[written++] = '/';
+        }
+        if (component_length >= 512 - written) {
+            errno = ENAMETOOLONG;
+            return 0;
+        }
+        memcpy(out + written, component, component_length);
+        written += component_length;
+        out[written] = 0;
+    }
+    return 1;
+}
+
 int text_open(TextFile *text, const char *path) {
     struct stat st;
+    char resolved[512];
     unsigned char bom[3] = {0};
+    if (!text || !path || !*path) {
+        errno = EINVAL;
+        return 0;
+    }
     memset(text, 0, sizeof(*text));
-    app_log("text", "open begin %s", path ? path : "(null)");
-    if (stat(path, &st)) {
-        app_log("text", "stat failed %s", path ? path : "(null)");
+    memset(&st, 0, sizeof(st));
+    app_log("text", "open begin %s", path);
+    if (strlen(path) >= sizeof(text->path)) {
+        errno = ENAMETOOLONG;
+        app_log("text", "path too long");
         return 0;
     }
-    text->fp = fopen(path, "rb");
+    if (!normalize_path(resolved, path)) {
+        app_log("text", "normalize failed %s", path);
+        return 0;
+    }
+    if (stat(resolved, &st)) {
+        app_log("text", "stat failed %s", resolved);
+        return 0;
+    }
+    if (!S_ISREG(st.st_mode) || st.st_size < 0 || (uint64_t)st.st_size > UINT32_MAX) {
+        errno = S_ISREG(st.st_mode) ? EFBIG : EINVAL;
+        app_log("text", "unsupported file size or type %s", resolved);
+        return 0;
+    }
+    text->fp = fopen(resolved, "rb");
     if (!text->fp) {
-        app_log("text", "fopen failed %s", path ? path : "(null)");
+        app_log("text", "fopen failed %s", resolved);
         return 0;
     }
-    strncpy(text->path, path, sizeof(text->path) - 1);
+    memcpy(text->path, resolved, strlen(resolved) + 1);
     text->size = (uint32_t)st.st_size;
     text->mtime = (uint32_t)st.st_mtime;
-    fread(bom, 1, 3, text->fp);
+    (void)fread(bom, 1, 3, text->fp);
     if (bom[0] == 0xef && bom[1] == 0xbb && bom[2] == 0xbf) {
         text->encoding = TEXT_UTF8;
         text->data_start = 3;
@@ -80,8 +160,8 @@ int text_open(TextFile *text, const char *path) {
         text->data_start = 0;
         text->encoding = text_utf8_valid_sample(text->fp, 0, 65536) ? TEXT_UTF8 : TEXT_GB18030;
     }
-    app_log("text", "open ok size=%lu encoding=%s data_start=%lu",
-            (unsigned long)text->size, text_encoding_name(text->encoding),
+    app_log("text", "open ok path=%s size=%lu encoding=%s data_start=%lu",
+            text->path, (unsigned long)text->size, text_encoding_name(text->encoding),
             (unsigned long)text->data_start);
     return 1;
 }
@@ -187,7 +267,8 @@ static int next_gb(TextDecoder *d, int first, uint16_t *out) {
         if (b3 == EOF || b4 == EOF) { *out = 0xfffd; return 1; }
         d->offset += 2;
         if (b3 >= 0x81 && b3 <= 0xfe && b4 >= 0x30 && b4 <= 0x39) {
-            unsigned p = (((first - 0x81) * 10u + (b2 - 0x30)) * 126u + (b3 - 0x81)) * 10u + (b4 - 0x30);
+            unsigned p = ((((unsigned)first - 0x81u) * 10u + ((unsigned)b2 - 0x30u)) * 126u +
+                          ((unsigned)b3 - 0x81u)) * 10u + ((unsigned)b4 - 0x30u);
             *out = gb_range_lookup(p); return 1;
         }
         *out = 0xfffd; return 1;
@@ -285,6 +366,87 @@ const char *text_encoding_name(TextEncoding encoding) {
 
 uint16_t text_fold_ascii(uint16_t value) {
     return value >= 'A' && value <= 'Z' ? (uint16_t)(value + ('a' - 'A')) : value;
+}
+
+static int search_char_equal(uint16_t left, uint16_t right) {
+    if (left < 128 && right < 128) return text_fold_ascii(left) == text_fold_ascii(right);
+    return left == right;
+}
+
+static uint32_t search_query_length(const uint16_t *query) {
+    uint32_t length = 0;
+    if (!query) return 0;
+    while (length < TEXT_SEARCH_QUERY_MAX && query[length]) ++length;
+    return length;
+}
+
+int text_find_forward(TextFile *text, const uint16_t *query, uint32_t from, uint32_t *hit_offset) {
+    TextDecoder decoder;
+    TextPosition start;
+    uint16_t ring[TEXT_SEARCH_QUERY_MAX];
+    uint32_t offsets[TEXT_SEARCH_QUERY_MAX];
+    uint16_t value;
+    uint32_t offset;
+    uint32_t query_length = search_query_length(query);
+    uint32_t seen = 0;
+    if (!text || !text->fp || !query_length || !hit_offset) {
+        errno = EINVAL;
+        return 0;
+    }
+    start = text_safe_position(text, from, 1);
+    text_decoder_at(text, &decoder, start);
+    while (text_next(&decoder, &value, &offset)) {
+        uint32_t i;
+        ring[seen % query_length] = value;
+        offsets[seen % query_length] = offset;
+        ++seen;
+        if (seen < query_length) continue;
+        for (i = 0; i < query_length; ++i) {
+            uint32_t index = (seen - query_length + i) % query_length;
+            if (!search_char_equal(ring[index], query[i])) break;
+        }
+        if (i == query_length) {
+            *hit_offset = offsets[(seen - query_length) % query_length];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int text_find_backward(TextFile *text, const uint16_t *query, uint32_t before,
+                       uint32_t *hit_offset) {
+    TextDecoder decoder;
+    uint16_t ring[TEXT_SEARCH_QUERY_MAX];
+    uint32_t offsets[TEXT_SEARCH_QUERY_MAX];
+    uint16_t value;
+    uint32_t offset;
+    uint32_t query_length = search_query_length(query);
+    uint32_t seen = 0;
+    int found = 0;
+    if (!text || !text->fp || !query_length || !hit_offset) {
+        errno = EINVAL;
+        return 0;
+    }
+    text_decoder_at(text, &decoder, (TextPosition){text->data_start, 1});
+    while (text_next(&decoder, &value, &offset)) {
+        uint32_t i;
+        uint32_t start;
+        ring[seen % query_length] = value;
+        offsets[seen % query_length] = offset;
+        ++seen;
+        if (seen < query_length) continue;
+        start = offsets[(seen - query_length) % query_length];
+        if (start >= before) break;
+        for (i = 0; i < query_length; ++i) {
+            uint32_t index = (seen - query_length + i) % query_length;
+            if (!search_char_equal(ring[index], query[i])) break;
+        }
+        if (i == query_length) {
+            *hit_offset = start;
+            found = 1;
+        }
+    }
+    return found;
 }
 
 void text_make_excerpt(TextFile *text, TextPosition position, uint16_t *out, size_t capacity) {
