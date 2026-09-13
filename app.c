@@ -75,10 +75,6 @@ static void set_color(Gc gc, int color) {
     gui_gc_setColorRGB(gc, (color >> 16) & 255, (color >> 8) & 255, color & 255);
 }
 
-static void blit_gc(Gc gc) {
-    gui_gc_blit_to_screen(gc);
-}
-
 static void fill_dim_outside(Gc gc, int x, int y, int w, int h) {
     gui_gc_setAlpha(gc, GC_A_HALF);
     set_color(gc, 0x000000);
@@ -100,7 +96,7 @@ static void app_message(Gc gc, const AppState *app, const char *title, const cha
     draw_text(gc, msg, 16, 84, Regular10, t->fg);
     draw_text(gc, TXT_ENTER_CONTINUE, 16, 202, Regular9, t->muted);
     gui_gc_finish(gc);
-    blit_gc(gc);
+    gui_gc_blit_to_screen(gc);
     for (;;) {
         if (isKeyPressed(KEY_NSPIRE_RET) || isKeyPressed(KEY_NSPIRE_ENTER) ||
             isKeyPressed(KEY_NSPIRE_ESC) || isKeyPressed(KEY_NSPIRE_CLICK)) {
@@ -139,10 +135,6 @@ static void debug_fail_errno(const char *where, const char *what) {
     debug_fail(where, "%s", buf);
 }
 
-static void debug_wrap_text(Gc gc, const char *text, int x, int y, int width, gui_gc_Font font, int color) {
-    (void)draw_wrapped_text(gc, text, x, y, width, font, color);
-}
-
 static void debug_error_page(const char *title, const char *where, const char *detail, int fatal) {
     AppState fallback_app;
     AppState *app = debug_state.app_ready && debug_state.app ? debug_state.app : &fallback_app;
@@ -165,13 +157,13 @@ static void debug_error_page(const char *title, const char *where, const char *d
     draw_text(gc, head, 10, 6, Bold10, 0xffffff);
     draw_text(gc, fatal ? "程序已进入致命错误处理" : "程序捕获到错误", 10, 38, Regular10, 0xffffff);
     draw_text(gc, "位置:", 10, 70, Bold10, 0xffd8d8);
-    debug_wrap_text(gc, where ? where : "unknown", 10, 88, SCREEN_W - 20, Regular10, 0xffffff);
+    (void)draw_wrapped_text(gc, where ? where : "unknown", 10, 88, SCREEN_W - 20, Regular10, 0xffffff);
     draw_text(gc, "详情:", 10, 122, Bold10, 0xffd8d8);
-    debug_wrap_text(gc, detail ? detail : "(none)", 10, 140, SCREEN_W - 20, Regular10, 0xffffff);
+    (void)draw_wrapped_text(gc, detail ? detail : "(none)", 10, 140, SCREEN_W - 20, Regular10, 0xffffff);
     draw_text(gc, meta, 10, 198, Regular9, 0xf0c0c0);
     draw_text(gc, fatal ? TXT_ESC_OR_ENTER_STAY : TXT_ESC_OR_ENTER_BACK, 10, 216, Regular9, t->muted);
     gui_gc_finish(gc);
-    blit_gc(gc);
+    gui_gc_blit_to_screen(gc);
     for (;;) {
         if (isKeyPressed(KEY_NSPIRE_RET) || isKeyPressed(KEY_NSPIRE_ENTER) ||
             isKeyPressed(KEY_NSPIRE_ESC) || isKeyPressed(KEY_NSPIRE_CLICK)) {
@@ -340,7 +332,7 @@ static int progress_cb(uint32_t done, uint32_t total, void *ctx) {
              total ? (unsigned long)(((uint64_t)done * 100u) / total) : 0ul);
     draw_text(r->gc, msg, 42, 104, Regular10, themes[r->app->theme].fg);
     gui_gc_finish(r->gc);
-    blit_gc(r->gc);
+    gui_gc_blit_to_screen(r->gc);
     return 1;
 }
 
@@ -458,7 +450,7 @@ static void draw_page(Reader *r) {
     }
     draw_text(r->gc, status, 6, SCREEN_H - 15, Regular9, t->muted);
     gui_gc_finish(r->gc);
-    blit_gc(r->gc);
+    gui_gc_blit_to_screen(r->gc);
 }
 
 static void reader_goto(Reader *r, TextPosition pos) {
@@ -532,7 +524,7 @@ static int choose_list_rows(Gc gc, AppState *app, const char *title, const char 
         }
         draw_text(gc, TXT_FOOTER_LIST, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
-        blit_gc(gc);
+        gui_gc_blit_to_screen(gc);
         key = wait_key(); wait_release();
         if (key >= 21 && key <= 29) {
             int pick = key - 21;
@@ -827,7 +819,7 @@ static void about_page(Gc gc, AppState *app) {
         draw_text(gc, "License: GNU GPL v3.0", 10, 160, Regular9, t->fg);
         draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
-        blit_gc(gc);
+        gui_gc_blit_to_screen(gc);
         key = wait_key();
         wait_release();
         if (key == 5 || key == 6) return;
@@ -851,7 +843,7 @@ static void usage_page(Gc gc, AppState *app) {
         draw_text(gc, "支持UTF-8、GB18030、带BOM的UTF-16", 10, 186, Regular9, t->fg);
         draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
-        blit_gc(gc);
+        gui_gc_blit_to_screen(gc);
         key = wait_key();
         wait_release();
         if (key == 5 || key == 6) return;
@@ -1136,7 +1128,7 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
                  i + 1, count, tutorial_key_label(step));
         draw_text(gc, footer, 14, panel_y + 60, Regular9, t->muted);
         gui_gc_finish(gc);
-        blit_gc(gc);
+        gui_gc_blit_to_screen(gc);
 
         key = wait_key();
         ctrl = last_key_ctrl;
@@ -1215,7 +1207,7 @@ static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) 
         }
         draw_text(gc, "1-7直达  左右/Enter执行  Esc返回", 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
-        blit_gc(gc);
+        gui_gc_blit_to_screen(gc);
         key = wait_key(); wait_release();
         if (key == 1) sel = sel > 0 ? sel - 1 : 6;
         else if (key == 2) sel = sel < 6 ? sel + 1 : 0;
@@ -1273,7 +1265,7 @@ static void file_info(Reader *r) {
 
         draw_text(r->gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(r->gc);
-        blit_gc(r->gc);
+        gui_gc_blit_to_screen(r->gc);
 
         y = wait_key();
         wait_release();
@@ -1424,7 +1416,7 @@ static void draw_home(Gc gc, AppState *app, int sel, int top) {
     }
     draw_text(gc, TXT_FOOTER_HOME, 8, FOOTER_Y, Regular9, t->muted);
     gui_gc_finish(gc);
-    blit_gc(gc);
+    gui_gc_blit_to_screen(gc);
     if (!logged_once) {
         app_log("home", "draw ok");
         logged_once = 1;
@@ -1471,7 +1463,7 @@ static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
         }
         draw_text(gc, TXT_FOOTER_BROWSER, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
-        blit_gc(gc);
+        gui_gc_blit_to_screen(gc);
         key = wait_key();
         wait_release();
         if (key == 1) {
