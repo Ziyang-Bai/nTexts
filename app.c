@@ -718,7 +718,8 @@ static void do_chapter_jump(Reader *r) {
     }
     title = r->index.chapters_truncated ? TXT_CHAPTER_DIRECTORY_LIMIT : TXT_CHAPTER_DIRECTORY;
     pick = choose_u16_list(r->gc, r->app, title, r->index.chapters[0].title,
-                           CHAPTER_TITLE_LEN, (int)r->index.chapter_count);
+                           sizeof(r->index.chapters[0]) / sizeof(r->index.chapters[0].title[0]),
+                           (int)r->index.chapter_count);
     if (pick >= 0) reader_goto(r, r->index.chapters[pick].position);
 }
 

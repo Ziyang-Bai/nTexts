@@ -7,9 +7,9 @@
 #include <string.h>
 
 #define INDEX_MAGIC 0x5849544eu
-#define INDEX_VERSION 6u
+#define INDEX_VERSION 7u
 #define LEGACY_INDEX_VERSION_MIN 4u
-#define LEGACY_INDEX_VERSION_MAX 5u
+#define LEGACY_INDEX_VERSION_MAX 6u
 
 typedef struct {
     uint32_t magic, version, file_size, file_mtime, encoding;
@@ -57,13 +57,7 @@ static int chapter_space(uint16_t value) {
 static int append_chapter(PageIndex *index, TextPosition position,
                           const uint16_t *line, uint32_t length) {
     Chapter *chapter;
-    uint32_t start = 0;
-    uint32_t end = length;
-    uint32_t title_length;
     uint32_t i;
-    while (start < end && chapter_space(line[start])) ++start;
-    while (end > start && chapter_space(line[end - 1])) --end;
-    if (start == end) return 1;
     if (index->chapter_count >= MAX_CHAPTERS) {
         index->chapters_truncated = 1;
         return 1;
@@ -80,12 +74,11 @@ static int append_chapter(PageIndex *index, TextPosition position,
     chapter = &index->chapters[index->chapter_count++];
     memset(chapter, 0, sizeof(*chapter));
     chapter->position = position;
-    title_length = end - start;
-    if (title_length >= CHAPTER_TITLE_LEN) {
-        for (i = 0; i < CHAPTER_TITLE_LEN - 2; ++i) chapter->title[i] = line[start + i];
+    if (length >= CHAPTER_TITLE_LEN) {
+        for (i = 0; i < CHAPTER_TITLE_LEN - 2; ++i) chapter->title[i] = line[i];
         chapter->title[CHAPTER_TITLE_LEN - 2] = 0x2026;
     } else {
-        for (i = 0; i < title_length; ++i) chapter->title[i] = line[start + i];
+        for (i = 0; i < length; ++i) chapter->title[i] = line[i];
     }
     return 1;
 }
@@ -99,7 +92,7 @@ static int collect_chapter(PageIndex *index, const ChapterRules *rules, TextPosi
     if (overlong || start == end) return 1;
     line[end] = 0;
     if (!chapter_rules_match(rules, line + start)) return 1;
-    return append_chapter(index, position, line, length);
+    return append_chapter(index, position, line + start, end - start);
 }
 
 void index_init(PageIndex *index) { memset(index, 0, sizeof(*index)); }

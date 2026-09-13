@@ -389,6 +389,48 @@ static int test_chapter_rules_and_index_round_trip(void) {
     index_free(&built);
     text_close(&text);
 
+    {
+        char content[48];
+        char expected[48];
+        char padded[50];
+        memcpy(content, "Chapter 1 ", 10);
+        memset(content + 10, 'x', 36);
+        content[46] = 'Z';
+        content[47] = ' ';
+        memcpy(expected, content, 47);
+        expected[47] = 0;
+        make_path(path, sizeof(path), "chapter-title-boundary.txt");
+        make_path(cache, sizeof(cache), "chapter-title-boundary.idx");
+        CHECK(write_bytes(path, content, sizeof(content)));
+        CHECK(text_open(&text, path));
+        CHECK(index_build(&built, &text, NULL, layout, &defaults, NULL, NULL) == 1);
+        CHECK(built.chapter_count == 1);
+        CHECK(built.chapters[0].position.byte_offset == 0);
+        CHECK(built.chapters[0].position.source_line == 1);
+        CHECK(u16_ascii_equal(built.chapters[0].title, expected));
+        CHECK(built.chapters[0].title[47] == 0);
+        CHECK(index_save(&built, cache));
+        CHECK(index_load(&loaded, &text, layout, &defaults, cache));
+        CHECK(loaded.chapter_count == 1);
+        CHECK(u16_ascii_equal(loaded.chapters[0].title, expected));
+        index_free(&loaded);
+        index_free(&built);
+        text_close(&text);
+
+        padded[0] = padded[1] = ' ';
+        memcpy(padded + 2, content, sizeof(content));
+        padded[49] = '\t';
+        CHECK(write_bytes(path, padded, sizeof(padded)));
+        CHECK(text_open(&text, path));
+        CHECK(index_build(&built, &text, NULL, layout, &defaults, NULL, NULL) == 1);
+        CHECK(built.chapter_count == 1);
+        CHECK(built.chapters[0].position.byte_offset == 0);
+        CHECK(built.chapters[0].position.source_line == 1);
+        CHECK(u16_ascii_equal(built.chapters[0].title, expected));
+        index_free(&built);
+        text_close(&text);
+    }
+
     make_path(cap_path, sizeof(cap_path), "chapter-cap.txt");
     fp = fopen(cap_path, "wb");
     CHECK(fp != NULL);
@@ -675,6 +717,17 @@ static int test_index_corruption_recovery(void) {
     CHECK(rewrite_crc(data, size) && write_bytes(cache_path, data, size));
     free(data);
     CHECK(!index_load(&loaded, &text, layout, &rules, cache_path));
+
+    CHECK(index_save(&built, cache_path));
+    data = read_bytes(cache_path, &size);
+    CHECK(data && size >= 8);
+    put_le32(data + 4, 6u);
+    CHECK(rewrite_crc(data, size) && write_bytes(cache_path, data, size));
+    free(data);
+    loaded.total_source_lines = 55;
+    CHECK(!index_load(&loaded, &text, layout, &rules, cache_path));
+    CHECK(loaded.total_source_lines == 55);
+    index_free(&loaded);
 
     CHECK(index_build(&recovered, &text, NULL, layout, &rules, NULL, NULL) == 1);
     CHECK(index_save(&recovered, cache_path));
