@@ -51,8 +51,6 @@ uint32_t storage_hash_path(const char *path) {
 static void storage_join_path(char *out, size_t capacity, const char *base, const char *leaf) {
     size_t len;
     if (!capacity) return;
-    if (!base) base = "";
-    if (!leaf) leaf = "";
     len = strlen(base);
     snprintf(out, capacity, "%s%s%s", base,
              (len && base[len - 1] != '/' && base[len - 1] != '\\') ? "/" : "",
@@ -354,8 +352,6 @@ static void adapt_stale_book(BookState *state, TextFile *text) {
         kept[i] = state->bookmarks[i];
         if (kept[i].position.byte_offset > text->size)
             kept[i].position.byte_offset = text->size;
-        if (!kept[i].position.source_line)
-            kept[i].position.source_line = 1;
     }
     storage_book_defaults(state, text);
     state->bookmark_count = kept_count;
@@ -484,7 +480,7 @@ int storage_remove_recent(AppState *state, const char *path) {
     kept = write;
     while (write < MAX_RECENTS) memset(&state->recents[write++], 0, sizeof(state->recents[0]));
     if (changed) {
-        state->recent_count = kept <= MAX_RECENTS ? kept : MAX_RECENTS;
+        state->recent_count = kept;
         app_log("storage", "removed recent path=%s", path);
     }
     return changed;
@@ -514,7 +510,7 @@ int storage_prune_recents(AppState *state) {
         write++;
     }
     if (state->recent_count != kept) changed = 1;
-    state->recent_count = kept <= MAX_RECENTS ? kept : MAX_RECENTS;
+    state->recent_count = kept;
     return changed;
 }
 

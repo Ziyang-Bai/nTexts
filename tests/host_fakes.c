@@ -6,6 +6,7 @@
 int host_rename_calls;
 int host_rename_errno = ENOSYS;
 int host_char_width = 8;
+const char *host_documents_dir = ".";
 
 int rename(const char *old_path, const char *new_path) {
     (void)old_path;
@@ -27,5 +28,5 @@ int gui_gc_getCharWidth(Gc gc, gui_gc_Font font, short value) {
 }
 
 const char *get_documents_dir(void) {
-    return ".";
+    return host_documents_dir;
 }

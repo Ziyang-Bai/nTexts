@@ -20,6 +20,7 @@
 extern int host_rename_calls;
 extern int host_rename_errno;
 extern int host_char_width;
+extern const char *host_documents_dir;
 static const char *test_directory;
 
 #define CHECK(condition) do { \
@@ -170,6 +171,44 @@ static int test_ndless_rename_fallback(void) {
     return 1;
 }
 
+static int test_storage_init_documents_directory(void) {
+    char output[600];
+    char expected[600];
+    char documents[600];
+    struct stat st;
+    int result, saved_errno;
+
+    host_documents_dir = NULL;
+    strcpy(output, "previous");
+    CHECK(!storage_init(output, sizeof(output)));
+    CHECK(errno == ENOENT && output[0] == 0);
+    host_documents_dir = "";
+    strcpy(output, "previous");
+    CHECK(!storage_init(output, sizeof(output)));
+    CHECK(errno == ENOENT && output[0] == 0);
+
+    host_documents_dir = test_directory;
+    make_path(expected, sizeof(expected), "nTexts");
+    CHECK(storage_init(output, sizeof(output)));
+    CHECK(strcmp(output, expected) == 0);
+    CHECK(stat(output, &st) == 0 && S_ISDIR(st.st_mode));
+    snprintf(documents, sizeof(documents), "%s/", test_directory);
+    host_documents_dir = documents;
+    CHECK(storage_init(output, sizeof(output)));
+    CHECK(strcmp(output, expected) == 0 && errno == 0);
+
+    make_path(documents, sizeof(documents), "documents-file");
+    CHECK(write_bytes(documents, "file", 4));
+    make_path(expected, sizeof(expected), "documents-file/nTexts");
+    host_documents_dir = documents;
+    result = storage_init(output, sizeof(output));
+    saved_errno = errno;
+    host_documents_dir = ".";
+    CHECK(!result && saved_errno == ENOTDIR);
+    CHECK(strcmp(output, expected) == 0);
+    return 1;
+}
+
 static int test_canonical_path_persistence_identity(void) {
     static const char content[] = "first line\nsecond line\nthird line";
     AppState app;
@@ -210,6 +249,61 @@ static int test_canonical_path_persistence_identity(void) {
     app.recents[1].file_size = 1;
     CHECK(storage_prune_recents(&app));
     CHECK(app.recent_count == 1 && strcmp(app.recents[0].path, direct.path) == 0);
+
+    app.recent_count = MAX_RECENTS;
+    for (uint32_t i = 0; i < MAX_RECENTS; ++i) {
+        const char *recent_path = i % 2 ? alias_path : direct.path;
+        size_t path_length = strlen(recent_path);
+        CHECK(path_length < sizeof(app.recents[i].path));
+        memcpy(app.recents[i].path, recent_path, path_length + 1);
+        app.recents[i].offset = i;
+        app.recents[i].file_size = direct.size;
+    }
+    CHECK(!storage_prune_recents(&app));
+    CHECK(!storage_remove_recent(&app, NULL));
+    CHECK(!storage_remove_recent(&app, ""));
+    CHECK(!storage_remove_recent(&app, "absent"));
+    CHECK(app.recent_count == MAX_RECENTS);
+    for (uint32_t i = 0; i < MAX_RECENTS; ++i) {
+        CHECK(strcmp(app.recents[i].path, i % 2 ? alias_path : direct.path) == 0);
+        CHECK(app.recents[i].offset == i && app.recents[i].file_size == direct.size);
+    }
+    CHECK(storage_remove_recent(&app, alias_path));
+    CHECK(app.recent_count == MAX_RECENTS / 2);
+    for (uint32_t i = 0; i < MAX_RECENTS / 2; ++i) {
+        CHECK(strcmp(app.recents[i].path, direct.path) == 0);
+        CHECK(app.recents[i].offset == i * 2 && app.recents[i].file_size == direct.size);
+    }
+    for (uint32_t i = MAX_RECENTS / 2; i < MAX_RECENTS; ++i)
+        CHECK(app.recents[i].path[0] == 0 && app.recents[i].offset == 0 && app.recents[i].file_size == 0);
+    CHECK(!storage_remove_recent(&app, alias_path));
+    CHECK(storage_remove_recent(&app, direct.path));
+    CHECK(app.recent_count == 0);
+    for (uint32_t i = 0; i < MAX_RECENTS; ++i)
+        CHECK(app.recents[i].path[0] == 0 && app.recents[i].offset == 0 && app.recents[i].file_size == 0);
+
+    app.recent_count = MAX_RECENTS;
+    for (uint32_t i = 0; i < MAX_RECENTS; ++i) {
+        if (i % 2 == 0)
+            snprintf(app.recents[i].path, sizeof(app.recents[i].path), "%s", direct.path);
+        else if (i == 1 || i == 7)
+            make_path(app.recents[i].path, sizeof(app.recents[i].path), "missing-recent.txt");
+        else if (i == 3 || i == 9)
+            snprintf(app.recents[i].path, sizeof(app.recents[i].path), "%s", test_directory);
+        else
+            app.recents[i].path[0] = 0;
+        app.recents[i].offset = i;
+        app.recents[i].file_size = direct.size;
+    }
+    CHECK(storage_prune_recents(&app));
+    CHECK(app.recent_count == MAX_RECENTS / 2);
+    for (uint32_t i = 0; i < MAX_RECENTS / 2; ++i) {
+        CHECK(strcmp(app.recents[i].path, direct.path) == 0);
+        CHECK(app.recents[i].offset == i * 2 && app.recents[i].file_size == direct.size);
+    }
+    for (uint32_t i = MAX_RECENTS / 2; i < MAX_RECENTS; ++i)
+        CHECK(app.recents[i].path[0] == 0 && app.recents[i].offset == 0 && app.recents[i].file_size == 0);
+    CHECK(!storage_prune_recents(&app));
 
     chapter_rules_defaults(&rules);
     index_init(&built);
@@ -649,6 +743,7 @@ static int test_book_state_integrity_encoding_and_v3_migration(void) {
     CHECK(storage_load_book(&loaded, &changed, test_directory));
     CHECK(loaded.progress.byte_offset == changed.data_start);
     CHECK(loaded.bookmark_count == 1 && loaded.bookmarks[0].position.byte_offset == 50);
+    CHECK(loaded.bookmarks[0].position.source_line == 9);
     CHECK(loaded.bookmarks[0].excerpt[0] == 's');
     return 1;
 }
@@ -844,6 +939,7 @@ int main(int argc, char **argv) {
     static const TestCase tests[] = {
         {"test_crc32_known_vector", test_crc32_known_vector},
         {"test_ndless_rename_fallback", test_ndless_rename_fallback},
+        {"test_storage_init_documents_directory", test_storage_init_documents_directory},
         {"test_canonical_path_persistence_identity", test_canonical_path_persistence_identity},
         {"test_utf16_decoding_and_positions", test_utf16_decoding_and_positions},
         {"test_chapter_rules_and_index_round_trip", test_chapter_rules_and_index_round_trip},
