@@ -21,7 +21,7 @@ OBJS = main.o app.o app_language.o app_log.o text_engine.o reader_index.o storag
 DEPS = $(OBJS:.o=.d)
 HOST_TEST = .build/tests/test_host
 HOST_TEST_SOURCES = tests/test_host.c tests/host_fakes.c crc32.c chapter_rules.c file_replace.c text_engine.c reader_index.c storage.c
-HOST_TEST_HEADERS = chapter_rules.h crc32.h file_replace.h reader_index.h storage.h text_engine.h \
+HOST_TEST_HEADERS = app_log.h chapter_rules.h crc32.h file_replace.h gb18030_table.h reader_index.h storage.h text_engine.h \
 	tests/fakes/libndls.h tests/fakes/ngc.h
 
 all: $(EXE).tns
