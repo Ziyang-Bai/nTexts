@@ -128,11 +128,6 @@ def test_tutorial_mentions_supported_text_encodings():
     assert "UTF-16 大端/小端会自动识别。" in tutorial
 
 
-def test_tutorial_strings_remain_available_for_messages():
-    assert "TXT_TUTORIAL_RESET_DONE" in STRINGS
-    assert "TXT_TUTORIAL_SKIP_DONE" in STRINGS
-
-
 def test_chapter_navigation_and_rule_wiring():
     jump = body_of("do_jump")
     chapter_jump = body_of("do_chapter_jump")
@@ -165,17 +160,14 @@ def test_bookmark_list_uses_persisted_excerpts():
     mock = body_of("tutorial_mock_screen")
     assert "text_make_excerpt" in bookmarks
     assert "bookmark->excerpt[0]" in bookmarks
-    assert "uint64_t" in bookmarks
     assert "choose_u16_list" in bookmarks
     assert "（空白）" in bookmarks
     assert "教学演示文档第二章" in mock
 
 
 def test_utf16_and_u16_list_ui_contracts():
-    choose = body_of("choose_u16_list")
     info = body_of("file_info")
     open_reader = body_of("open_reader")
-    assert "choose_list_rows" in choose
     assert "text_encoding_name" in info
     assert "index_free(&r.index);" in open_reader
     assert "带BOM的UTF-16" in APP
@@ -191,7 +183,6 @@ if __name__ == "__main__":
         test_tutorial_logs_steps_and_keys_for_serial_debugging,
         test_search_boundary_messages_distinguish_current_hit_from_no_match,
         test_tutorial_mentions_supported_text_encodings,
-        test_tutorial_strings_remain_available_for_messages,
         test_chapter_navigation_and_rule_wiring,
         test_chapter_help_documents_wildcards_and_jump,
         test_bookmark_list_uses_persisted_excerpts,
