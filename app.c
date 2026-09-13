@@ -314,14 +314,13 @@ static int wait_key(void) {
     }
 }
 
-static Layout layout_from_state(Gc gc, const AppState *state) {
+static Layout layout_from_state(const AppState *state) {
     const int fonts[] = {Regular9, Regular10, Regular12};
     const int margins[] = {6, 14};
     const int line_heights[] = {20, 24, 28};
     Layout l;
     int fi = state->font_choice < 0 || state->font_choice > 2 ? 1 : state->font_choice;
     int mi = state->margin_choice ? 1 : 0;
-    (void)gc;
     l.font_size = fonts[fi];
     l.margin = margins[mi];
     l.line_height = line_heights[fi];
@@ -760,7 +759,7 @@ static int apply_setting_change(Reader *r, AppState *app, const char *data_dir, 
     }
     if (r) {
         uint32_t pct = percent_for_reader(r);
-        r->layout = layout_from_state(r->gc, r->app);
+        r->layout = layout_from_state(r->app);
         index_free(&r->index);
         if (!ensure_index(r)) return -1;
         reader_goto(r, index_position_for_percent(&r->index, pct));
@@ -894,7 +893,6 @@ typedef struct {
     const char *title;
     const char *body1;
     const char *body2;
-    const char *body3;
     int key;
     int need_ctrl;
     int x, y, w, h;
@@ -1076,47 +1074,47 @@ static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
 static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
     const Theme *t = &themes[app->theme];
     const TutorialStep steps[] = {
-        {TUTORIAL_SCREEN_TRANSFER, "安装和传书", "先把 nTexts.tns 传进计算器。", "再把想看的文本放进 Documents。", "现在按 Enter 继续。", 5, 0, 8, 34, 304, 104},
-        {TUTORIAL_SCREEN_HOME, "主页", "这里显示最近阅读、浏览文档和设置。", "按 0 直接进入 Documents 浏览器。", "请按 0。", 12, 0, 6, 92, 180, 22},
-        {TUTORIAL_SCREEN_BROWSER, "浏览文档", "浏览器只显示目录、.txt 和 .txt.tns。", "上下移动光标。", "请按下键选择文件。", 2, 0, 6, 50, 220, 24},
-        {TUTORIAL_SCREEN_BROWSER_SELECTED, "进入或打开", "选中文件夹时 Enter 进入。", "选中文本文件时 Enter 打开。", "请按 Enter 打开演示文档。", 5, 0, 6, 50, 220, 24},
-        {TUTORIAL_SCREEN_LOADING, "加载和索引", "支持 UTF-8、GB18030 和带BOM的 UTF-16。", "UTF-16 大端/小端会自动识别。", "请按 Enter 继续。", 5, 0, 42, 96, 236, 64},
-        {TUTORIAL_SCREEN_READER, "阅读正文", "这是阅读区。", "左右翻页，上下按原文本物理行移动。", "请按右键翻到下一页。", 4, 0, 6, 8, 308, 176},
-        {TUTORIAL_SCREEN_READER_PAGE2, "返回上一页", "阅读进度将会保存，", "重新进入将会自动续读。", "请按左键。", 3, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER, "快捷跳到开头", "先回到了第一页。", "Ctrl+上 会跳到整本书开头。", "请按 Ctrl+上。", 1, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER_TOP, "快捷跳到结尾", "现在已经在开头。", "Ctrl+下 会跳到整本书结尾。", "请按 Ctrl+下。", 2, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER_END, "搜索快捷键", "已经跳到结尾。", "按 F 搜索文字，找到后会直接跳过去并标出来。", "请按 F。", 9, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_SEARCH, "继续找下一个", "现在已经找到一处。", "按 Enter 或下键继续找下一个，上键回到上一个。", "请按 Enter 找下一处。", 5, 0, 6, 62, 308, 30},
-        {TUTORIAL_SCREEN_SEARCH_NEXT, "回到上一个结果", "页面已经跳到下一处结果。", "如果跳过头了，按上键回到上一处。", "请按上键。", 1, 0, 6, 62, 308, 30},
-        {TUTORIAL_SCREEN_READER, "跳转快捷键", "G 打开跳转。", "可按百分比、页码、物理行号或章节目录跳转。", "请按 G。", 10, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_JUMP, "跳转菜单", "先选择跳转方式。", "这里选百分比。", "请按 1。", 21, 0, 14, 62, 116, 20},
-        {TUTORIAL_SCREEN_JUMP_INPUT, "输入跳转位置", "输入 50，表示跳到全书中间。", "确认后就会过去。", "请按 Enter。", 5, 0, 24, 72, 180, 48},
-        {TUTORIAL_SCREEN_JUMP_RESULT, "已经跳转", "现在到了 50% 附近。", "实际阅读时会回到对应页面。", "请按 Enter 继续。", 5, 0, 6, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER, "书签快捷键", "B 可以直接添加书签。", "Menu 里可以管理书签。", "请按 B。", 8, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_BOOKMARK, "书签已保存", "当前位置已经保存为书签。", "以后可以从管理书签跳回来。", "请按 Enter 继续。", 5, 0, 6, 38, 308, 68},
-        {TUTORIAL_SCREEN_READER, "打开功能菜单", "Menu 打开完整功能菜单。", "下面会逐项练习菜单。", "请按 Menu。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 1: 添加书签", "添加当前位置书签。", "也可以直接按 B。", "请按 1。", 21, 0, 6, 28, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 2: 管理书签", "这里可以回到书签，", "也可以删掉不用的书签。", "请按 2。", 22, 0, 6, 47, 170, 20},
-        {TUTORIAL_SCREEN_BOOKMARK_LIST, "选择书签", "先选一个书签。", "按 Enter 打开操作菜单。", "请按 Enter。", 5, 0, 6, 32, 170, 24},
-        {TUTORIAL_SCREEN_BOOKMARK_ACTION, "跳到书签", "选“跳转”会回到这个位置。", "这和真正阅读时一样。", "请按 1。", 21, 0, 6, 32, 130, 24},
-        {TUTORIAL_SCREEN_BOOKMARK_JUMP, "已经跳到书签", "页面回到了书签位置。", "现在再演示删除书签。", "请按 Menu。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_MENU, "再次打开书签", "回到菜单后再次进入管理书签。", "这次删掉刚才的书签。", "请按 2。", 22, 0, 6, 47, 170, 20},
-        {TUTORIAL_SCREEN_BOOKMARK_LIST, "选择要删除的书签", "还是先选中书签。", "按 Enter 打开操作菜单。", "请按 Enter。", 5, 0, 6, 32, 170, 24},
-        {TUTORIAL_SCREEN_BOOKMARK_ACTION, "删除书签", "在操作菜单里选“删除”。", "删除后正文不会受影响。", "请按 2。", 22, 0, 6, 54, 130, 24},
-        {TUTORIAL_SCREEN_BOOKMARK_DELETE, "书签已删除", "书签列表已经清空。", "以后也可以这样整理书签。", "请按 Enter 继续。", 5, 0, 6, 52, 220, 48},
-        {TUTORIAL_SCREEN_MENU, "菜单 3: 搜索", "输入想找的字词。", "找到后会跳到对应位置并标出来。", "请按 3。", 23, 0, 6, 66, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 4/5: 继续查找", "4 继续找下一个，5 回到上一个。", "会沿用刚才输入的搜索词。", "请按 4。", 24, 0, 6, 85, 190, 40},
-        {TUTORIAL_SCREEN_MENU, "菜单 6: 跳转", "按百分比、页码、物理行号或章节目录跳转。", "也可以直接按 G。", "请按 6。", 26, 0, 6, 123, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 7: 阅读设置", "调整字号、主题和边距。", "设置变化会重建当前书索引。", "请按 7。", 27, 0, 6, 142, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 8: 文件信息", "这里能看到文件名、路径、编码和页数。", "需要确认文件时很有用。", "请按 8。", 28, 0, 6, 161, 170, 20},
-        {TUTORIAL_SCREEN_FILE_INFO, "查看文件信息", "这就是文件信息页。", "看完按 Enter 或 Esc 返回。", "请按 Enter。", 5, 0, 8, 8, 304, 198},
-        {TUTORIAL_SCREEN_MENU, "菜单 9: 返回书库", "9 返回书库。", "返回书库也可以直接按 Esc。", "请按 9。", 29, 0, 6, 180, 170, 20},
-        {TUTORIAL_SCREEN_HOME_RECENT, "从最近阅读进入", "打开过的书会出现在最近阅读。", "选中最近阅读后 Enter 继续阅读。", "请按 Enter。", 5, 0, 6, 50, 240, 24},
-        {TUTORIAL_SCREEN_HOME, "打开阅读设置", "主页按 (-) 打开阅读设置。", "也可在阅读菜单中打开。", "请按 (-)。", 13, 0, 6, 114, 180, 24},
-        {TUTORIAL_SCREEN_SETTINGS, "更改字号", "设置里按 1 或 Enter/左右切换字号。", "大字号会重新分页。", "请按 1。", 21, 0, 6, 28, 292, 22},
-        {TUTORIAL_SCREEN_SETTINGS_FONT, "更改主题", "字号已经切换。", "按 2 切换浅色、深色和护眼主题。", "请按 2。", 22, 0, 6, 50, 292, 22},
-        {TUTORIAL_SCREEN_SETTINGS_THEME, "更改边距", "主题已经切换。", "按 3 切换窄边距和宽边距。", "请按 3。", 23, 0, 6, 72, 292, 22},
-        {TUTORIAL_SCREEN_SETTINGS_MARGIN, "章节规则和教学重置", "第4项可添加全局章节规则，*匹配多个字符，?匹配一个。", "第7项可让下次启动重新教学。", "请按 Enter 完成教学。", 5, 0, 6, 94, 292, 94}
+        {TUTORIAL_SCREEN_TRANSFER, "安装和传书", "先把 nTexts.tns 传进计算器。", "再把想看的文本放进 Documents。", 5, 0, 8, 34, 304, 104},
+        {TUTORIAL_SCREEN_HOME, "主页", "这里显示最近阅读、浏览文档和设置。", "按 0 直接进入 Documents 浏览器。", 12, 0, 6, 92, 180, 22},
+        {TUTORIAL_SCREEN_BROWSER, "浏览文档", "浏览器只显示目录、.txt 和 .txt.tns。", "上下移动光标。", 2, 0, 6, 50, 220, 24},
+        {TUTORIAL_SCREEN_BROWSER_SELECTED, "进入或打开", "选中文件夹时 Enter 进入。", "选中文本文件时 Enter 打开。", 5, 0, 6, 50, 220, 24},
+        {TUTORIAL_SCREEN_LOADING, "加载和索引", "支持 UTF-8、GB18030 和带BOM的 UTF-16。", "UTF-16 大端/小端会自动识别。", 5, 0, 42, 96, 236, 64},
+        {TUTORIAL_SCREEN_READER, "阅读正文", "这是阅读区。", "左右翻页，上下按原文本物理行移动。", 4, 0, 6, 8, 308, 176},
+        {TUTORIAL_SCREEN_READER_PAGE2, "返回上一页", "阅读进度将会保存，", "重新进入将会自动续读。", 3, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_READER, "快捷跳到开头", "先回到了第一页。", "Ctrl+上 会跳到整本书开头。", 1, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_READER_TOP, "快捷跳到结尾", "现在已经在开头。", "Ctrl+下 会跳到整本书结尾。", 2, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_READER_END, "搜索快捷键", "已经跳到结尾。", "按 F 搜索文字，找到后会直接跳过去并标出来。", 9, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_SEARCH, "继续找下一个", "现在已经找到一处。", "按 Enter 或下键继续找下一个，上键回到上一个。", 5, 0, 6, 62, 308, 30},
+        {TUTORIAL_SCREEN_SEARCH_NEXT, "回到上一个结果", "页面已经跳到下一处结果。", "如果跳过头了，按上键回到上一处。", 1, 0, 6, 62, 308, 30},
+        {TUTORIAL_SCREEN_READER, "跳转快捷键", "G 打开跳转。", "可按百分比、页码、物理行号或章节目录跳转。", 10, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_JUMP, "跳转菜单", "先选择跳转方式。", "这里选百分比。", 21, 0, 14, 62, 116, 20},
+        {TUTORIAL_SCREEN_JUMP_INPUT, "输入跳转位置", "输入 50，表示跳到全书中间。", "确认后就会过去。", 5, 0, 24, 72, 180, 48},
+        {TUTORIAL_SCREEN_JUMP_RESULT, "已经跳转", "现在到了 50% 附近。", "实际阅读时会回到对应页面。", 5, 0, 6, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_READER, "书签快捷键", "B 可以直接添加书签。", "Menu 里可以管理书签。", 8, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_BOOKMARK, "书签已保存", "当前位置已经保存为书签。", "以后可以从管理书签跳回来。", 5, 0, 6, 38, 308, 68},
+        {TUTORIAL_SCREEN_READER, "打开功能菜单", "Menu 打开完整功能菜单。", "下面会逐项练习菜单。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_MENU, "菜单 1: 添加书签", "添加当前位置书签。", "也可以直接按 B。", 21, 0, 6, 28, 170, 20},
+        {TUTORIAL_SCREEN_MENU, "菜单 2: 管理书签", "这里可以回到书签，", "也可以删掉不用的书签。", 22, 0, 6, 47, 170, 20},
+        {TUTORIAL_SCREEN_BOOKMARK_LIST, "选择书签", "先选一个书签。", "按 Enter 打开操作菜单。", 5, 0, 6, 32, 170, 24},
+        {TUTORIAL_SCREEN_BOOKMARK_ACTION, "跳到书签", "选“跳转”会回到这个位置。", "这和真正阅读时一样。", 21, 0, 6, 32, 130, 24},
+        {TUTORIAL_SCREEN_BOOKMARK_JUMP, "已经跳到书签", "页面回到了书签位置。", "现在再演示删除书签。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_MENU, "再次打开书签", "回到菜单后再次进入管理书签。", "这次删掉刚才的书签。", 22, 0, 6, 47, 170, 20},
+        {TUTORIAL_SCREEN_BOOKMARK_LIST, "选择要删除的书签", "还是先选中书签。", "按 Enter 打开操作菜单。", 5, 0, 6, 32, 170, 24},
+        {TUTORIAL_SCREEN_BOOKMARK_ACTION, "删除书签", "在操作菜单里选“删除”。", "删除后正文不会受影响。", 22, 0, 6, 54, 130, 24},
+        {TUTORIAL_SCREEN_BOOKMARK_DELETE, "书签已删除", "书签列表已经清空。", "以后也可以这样整理书签。", 5, 0, 6, 52, 220, 48},
+        {TUTORIAL_SCREEN_MENU, "菜单 3: 搜索", "输入想找的字词。", "找到后会跳到对应位置并标出来。", 23, 0, 6, 66, 170, 20},
+        {TUTORIAL_SCREEN_MENU, "菜单 4/5: 继续查找", "4 继续找下一个，5 回到上一个。", "会沿用刚才输入的搜索词。", 24, 0, 6, 85, 190, 40},
+        {TUTORIAL_SCREEN_MENU, "菜单 6: 跳转", "按百分比、页码、物理行号或章节目录跳转。", "也可以直接按 G。", 26, 0, 6, 123, 170, 20},
+        {TUTORIAL_SCREEN_MENU, "菜单 7: 阅读设置", "调整字号、主题和边距。", "设置变化会重建当前书索引。", 27, 0, 6, 142, 170, 20},
+        {TUTORIAL_SCREEN_MENU, "菜单 8: 文件信息", "这里能看到文件名、路径、编码和页数。", "需要确认文件时很有用。", 28, 0, 6, 161, 170, 20},
+        {TUTORIAL_SCREEN_FILE_INFO, "查看文件信息", "这就是文件信息页。", "看完按 Enter 或 Esc 返回。", 5, 0, 8, 8, 304, 198},
+        {TUTORIAL_SCREEN_MENU, "菜单 9: 返回书库", "9 返回书库。", "返回书库也可以直接按 Esc。", 29, 0, 6, 180, 170, 20},
+        {TUTORIAL_SCREEN_HOME_RECENT, "从最近阅读进入", "打开过的书会出现在最近阅读。", "选中最近阅读后 Enter 继续阅读。", 5, 0, 6, 50, 240, 24},
+        {TUTORIAL_SCREEN_HOME, "打开阅读设置", "主页按 (-) 打开阅读设置。", "也可在阅读菜单中打开。", 13, 0, 6, 114, 180, 24},
+        {TUTORIAL_SCREEN_SETTINGS, "更改字号", "设置里按 1 或 Enter/左右切换字号。", "大字号会重新分页。", 21, 0, 6, 28, 292, 22},
+        {TUTORIAL_SCREEN_SETTINGS_FONT, "更改主题", "字号已经切换。", "按 2 切换浅色、深色和护眼主题。", 22, 0, 6, 50, 292, 22},
+        {TUTORIAL_SCREEN_SETTINGS_THEME, "更改边距", "主题已经切换。", "按 3 切换窄边距和宽边距。", 23, 0, 6, 72, 292, 22},
+        {TUTORIAL_SCREEN_SETTINGS_MARGIN, "章节规则和教学重置", "第4项可添加全局章节规则，*匹配多个字符，?匹配一个。", "第7项可让下次启动重新教学。", 5, 0, 6, 94, 292, 94}
     };
     int count = (int)(sizeof(steps) / sizeof(steps[0]));
     for (int i = 0; i < count;) {
@@ -1333,7 +1331,7 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
     if (strcmp(path, r.text.path))
         storage_remove_recent(app, path);
     storage_load_book(&r.book, &r.text, data_dir);
-    r.layout = layout_from_state(gc, app);
+    r.layout = layout_from_state(app);
     if (!ensure_index(&r)) {
         app_log("reader", "ensure index failed");
         index_free(&r.index);

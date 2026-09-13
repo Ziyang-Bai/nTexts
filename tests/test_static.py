@@ -57,7 +57,6 @@ def test_interactive_tutorial_requires_real_keys_and_keeps_skip_inside_tutorial(
     assert "key == step->key" in tutorial
     assert "0跳过" in tutorial
     assert "FOOTER_Y" not in tutorial
-    assert "step->body3" not in tutorial
     assert "TUTORIAL_ALL_SKIPPED" in tutorial
     assert tutorial.count("{TUTORIAL_SCREEN_") >= 28
 
