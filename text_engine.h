@@ -38,7 +38,6 @@ void text_close(TextFile *text);
 void text_decoder_at(TextFile *text, TextDecoder *decoder, TextPosition position);
 TextPosition text_safe_position(TextFile *text, uint32_t offset, uint32_t fallback_line);
 int text_next(TextDecoder *decoder, uint16_t *value, uint32_t *char_offset);
-int text_utf8_valid_sample(FILE *fp, uint32_t start, uint32_t max_bytes);
 const char *text_encoding_name(TextEncoding encoding);
 uint16_t text_fold_ascii(uint16_t value);
 int text_find_forward(TextFile *text, const uint16_t *query, uint32_t from, uint32_t *hit_offset);

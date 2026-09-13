@@ -28,7 +28,7 @@ static uint16_t gb_range_lookup(unsigned pointer) {
     return 0xfffd;
 }
 
-int text_utf8_valid_sample(FILE *fp, uint32_t start, uint32_t max_bytes) {
+static int text_utf8_valid_sample(FILE *fp, uint32_t start, uint32_t max_bytes) {
     uint32_t read = 0;
     int c;
     if (fseek(fp, start, SEEK_SET) != 0) return 0;
