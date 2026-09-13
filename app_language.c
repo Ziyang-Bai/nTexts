@@ -33,9 +33,7 @@ int utf8_to_u16(const char *s, uint16_t *out, int cap) {
 void draw_text(Gc gc, const char *utf8, int x, int y, gui_gc_Font font, int color) {
     uint16_t buf[NTEXTS_MAX_LINE_U16];
     utf8_to_u16(utf8, buf, NTEXTS_MAX_LINE_U16);
-    gui_gc_setFont(gc, font);
-    set_text_color(gc, color);
-    gui_gc_drawString(gc, (char *)buf, x, y, GC_SM_TOP);
+    draw_u16(gc, buf, x, y, font, color);
 }
 
 void draw_u16(Gc gc, const uint16_t *s, int x, int y, gui_gc_Font font, int color) {
