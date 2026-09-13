@@ -386,11 +386,10 @@ static uint32_t percent_for_reader(const Reader *r) {
     return (uint32_t)(((uint64_t)r->top.byte_offset * 100u) / r->text.size);
 }
 
-static int wrap_push(uint16_t lines[][NTEXTS_MAX_LINE_U16], int *lens, uint32_t starts[], int *line,
+static int wrap_push(uint16_t lines[][NTEXTS_MAX_LINE_U16], uint32_t starts[], int *line,
                      const uint16_t *buf, int len, uint32_t start) {
     if (*line >= 32) return 0;
     memcpy(lines[*line], buf, (len + 1) * sizeof(uint16_t));
-    lens[*line] = len;
     starts[*line] = start;
     (*line)++;
     return 1;
@@ -400,7 +399,7 @@ static void draw_page(Reader *r) {
     const Theme *t = &themes[r->app->theme];
     TextDecoder d;
     uint16_t lines[32][NTEXTS_MAX_LINE_U16], linebuf[NTEXTS_MAX_LINE_U16], ch;
-    int lens[32], line = 0, len = 0, width = 0, maxw = SCREEN_W - r->layout.margin * 2;
+    int line = 0, len = 0, width = 0, maxw = SCREEN_W - r->layout.margin * 2;
     uint32_t starts[32], off, line_start = r->top.byte_offset;
     char status[96];
     text_decoder_at(&r->text, &d, r->top);
@@ -410,7 +409,7 @@ static void draw_page(Reader *r) {
         if (ch == '\r') continue;
         if (ch == '\n') {
             linebuf[len] = 0;
-            wrap_push(lines, lens, starts, &line, linebuf, len, line_start);
+            wrap_push(lines, starts, &line, linebuf, len, line_start);
             len = width = 0;
             line_start = d.offset;
             continue;
@@ -421,7 +420,7 @@ static void draw_page(Reader *r) {
         if (cw <= 0) cw = r->layout.font_size & 31;
         if (len && width + cw > maxw) {
             linebuf[len] = 0;
-            wrap_push(lines, lens, starts, &line, linebuf, len, line_start);
+            wrap_push(lines, starts, &line, linebuf, len, line_start);
             len = width = 0;
             line_start = off;
             if (line >= r->layout.lines_per_page) break;
@@ -431,7 +430,7 @@ static void draw_page(Reader *r) {
     }
     if (line < r->layout.lines_per_page && len) {
         linebuf[len] = 0;
-        wrap_push(lines, lens, starts, &line, linebuf, len, line_start);
+        wrap_push(lines, starts, &line, linebuf, len, line_start);
     }
 
     gui_gc_begin(r->gc);
