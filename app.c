@@ -16,6 +16,14 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#ifndef NTEXTS_BUILD_VERSION
+#define NTEXTS_BUILD_VERSION "Beta Testing v0.0.1"
+#endif
+
+#ifndef NTEXTS_BUILD_COMMIT
+#define NTEXTS_BUILD_COMMIT "local"
+#endif
+
 #define SCREEN_W 320
 #define SCREEN_H 240
 #define DIRECTORY_INITIAL_CAPACITY 32
@@ -37,9 +45,13 @@ typedef struct {
     char data_dir[512];
     Gc gc;
     Layout layout;
+    int ascii_width[128];
+    uint16_t wide_chars[256];
+    int wide_width[256];
     TextPosition top;
     uint32_t page;
     uint32_t hit_offset;
+    uint32_t hit_end;
     int search_active;
     uint16_t last_query[QUERY_LEN];
 } Reader;
@@ -61,6 +73,9 @@ typedef struct {
 static scr_type_t screen_type = SCR_320x240_565;
 static DebugState debug_state;
 static int last_key_ctrl;
+static uint32_t app_locale;
+static const char build_version[] = NTEXTS_BUILD_VERSION;
+static const char build_commit[] = NTEXTS_BUILD_COMMIT;
 
 static const Theme themes[] = {
     {0xffffff, 0x111111, 0x777777, 0x005bbb, 0xd8ebff, 0x000000},
@@ -126,7 +141,7 @@ static void debug_fail(const char *where, const char *fmt, ...) {
     va_start(ap, fmt);
     debug_format(debug_state.detail, sizeof(debug_state.detail), fmt, ap);
     va_end(ap);
-    debug_error_page("未知错误", debug_state.where, debug_state.detail, 0);
+    debug_error_page(L("未知错误", "Unexpected error", "Erreur inattendue"), debug_state.where, debug_state.detail, 0);
 }
 
 static void debug_fail_errno(const char *where, const char *what) {
@@ -147,7 +162,7 @@ static void debug_error_page(const char *title, const char *where, const char *d
     if (app->theme < 0 || app->theme > 2) app->theme = 0;
     t = &themes[app->theme];
     snprintf(head, sizeof(head), "%s #%d", title, debug_state.error_count ? debug_state.error_count : 1);
-    snprintf(meta, sizeof(meta), "Ndless %u  HW subtype %u  lcd %d",
+    snprintf(meta, sizeof(meta), L("Ndless %u  HW subtype %u  lcd %d", "Ndless %u  HW subtype %u  lcd %d", "Ndless %u  mat. %u  écran %d"),
              nl_ndless_rev(), nl_hwsubtype(), (int)screen_type);
     gui_gc_begin(gc);
     set_color(gc, 0x2b0d0d);
@@ -155,11 +170,12 @@ static void debug_error_page(const char *title, const char *where, const char *d
     set_color(gc, 0x922f2f);
     gui_gc_fillRect(gc, 0, 0, SCREEN_W, 28);
     draw_text(gc, head, 10, 6, Bold10, 0xffffff);
-    draw_text(gc, fatal ? "程序已进入致命错误处理" : "程序捕获到错误", 10, 38, Regular10, 0xffffff);
-    draw_text(gc, "位置:", 10, 70, Bold10, 0xffd8d8);
-    (void)draw_wrapped_text(gc, where ? where : "unknown", 10, 88, SCREEN_W - 20, Regular10, 0xffffff);
-    draw_text(gc, "详情:", 10, 122, Bold10, 0xffd8d8);
-    (void)draw_wrapped_text(gc, detail ? detail : "(none)", 10, 140, SCREEN_W - 20, Regular10, 0xffffff);
+    draw_text(gc, fatal ? L("程序已进入致命错误处理", "Fatal error", "Erreur fatale") :
+              L("程序捕获到错误", "An error occurred", "Une erreur est survenue"), 10, 38, Regular10, 0xffffff);
+    draw_text(gc, L("位置:", "Where:", "Emplacement :"), 10, 70, Bold10, 0xffd8d8);
+    (void)draw_wrapped_text(gc, where ? where : L("未知", "unknown", "inconnu"), 10, 88, SCREEN_W - 20, Regular10, 0xffffff);
+    draw_text(gc, L("详情:", "Details:", "Détails :"), 10, 122, Bold10, 0xffd8d8);
+    (void)draw_wrapped_text(gc, detail ? detail : L("无", "none", "aucun"), 10, 140, SCREEN_W - 20, Regular10, 0xffffff);
     draw_text(gc, meta, 10, 198, Regular9, 0xf0c0c0);
     draw_text(gc, fatal ? TXT_ESC_OR_ENTER_STAY : TXT_ESC_OR_ENTER_BACK, 10, 216, Regular9, t->muted);
     gui_gc_finish(gc);
@@ -188,8 +204,9 @@ static void debug_signal_handler(int sig) {
     debug_state.fatal_active = 1;
     debug_state.error_count++;
     snprintf(debug_state.where, sizeof(debug_state.where), "signal:%s", name);
-    snprintf(debug_state.detail, sizeof(debug_state.detail), "捕获到运行时信号 %s (%d)", name, sig);
-    debug_error_page("致命错误", debug_state.where, debug_state.detail, 1);
+    snprintf(debug_state.detail, sizeof(debug_state.detail),
+             L("捕获到运行时信号 %s (%d)", "Runtime signal %s (%d)", "Signal reçu %s (%d)"), name, sig);
+    debug_error_page(L("致命错误", "Fatal error", "Erreur fatale"), debug_state.where, debug_state.detail, 1);
 }
 
 static void debug_install_handlers(void) {
@@ -226,7 +243,20 @@ static int cmp_items(const void *a, const void *b) {
     return strcmp(ia->name, ib->name);
 }
 
-static int load_dir(const char *dir, FileItem **out_items, int *count) {
+static int filename_matches(const char *name, const uint16_t *filter) {
+    uint16_t decoded[512];
+    int length = utf8_to_u16(name, decoded, (int)(sizeof(decoded) / sizeof(decoded[0])));
+    int start;
+    for (start = 0; start < length; ++start) {
+        int i = 0;
+        while (filter[i] && decoded[start + i] &&
+               text_fold_latin(decoded[start + i]) == text_fold_latin(filter[i])) ++i;
+        if (!filter[i]) return 1;
+    }
+    return 0;
+}
+
+static int load_dir(const char *dir, const uint16_t *filter, FileItem **out_items, int *count) {
     DIR *dp = opendir(dir);
     FileItem *items = NULL;
     struct dirent *de;
@@ -246,6 +276,7 @@ static int load_dir(const char *dir, FileItem **out_items, int *count) {
         if (!join_path(path, sizeof(path), dir, de->d_name)) continue;
         if (stat(path, &st)) continue;
         if (!S_ISDIR(st.st_mode) && !has_txt_ext(de->d_name)) continue;
+        if (!S_ISDIR(st.st_mode) && filter[0] && !filename_matches(de->d_name, filter)) continue;
         if (*count >= MAX_DIRECTORY_ITEMS) continue;
         if (*count == capacity) {
             next_capacity = capacity ? capacity * 2 : DIRECTORY_INITIAL_CAPACITY;
@@ -328,7 +359,7 @@ static int progress_cb(uint32_t done, uint32_t total, void *ctx) {
     gui_gc_begin(r->gc);
     set_color(r->gc, themes[r->app->theme].bg);
     gui_gc_fillRect(r->gc, 0, 0, SCREEN_W, SCREEN_H);
-    snprintf(msg, sizeof(msg), "首次索引: %lu%%  Esc取消",
+    snprintf(msg, sizeof(msg), L("首次索引: %lu%%  Esc取消", "Indexing: %lu%%  Esc cancel", "Indexation : %lu%%  Esc annuler"),
              total ? (unsigned long)(((uint64_t)done * 100u) / total) : 0ul);
     draw_text(r->gc, msg, 42, 104, Regular10, themes[r->app->theme].fg);
     gui_gc_finish(r->gc);
@@ -349,7 +380,7 @@ static int ensure_index(Reader *r) {
     app_log("reader", "index build needed");
     if (index_build(&r->index, &r->text, r->gc, r->layout, &r->app->chapter_rules,
                     progress_cb, r) <= 0) {
-        debug_fail("ensure_index:index_build", "索引构建被取消，或构建失败");
+        debug_fail("ensure_index:index_build", "%s", L("索引构建被取消，或构建失败", "Index canceled or failed", "Indexation annulée ou échouée"));
         return 0;
     }
     if (!index_save(&r->index, path))
@@ -378,51 +409,86 @@ static uint32_t percent_for_reader(const Reader *r) {
     return (uint32_t)(((uint64_t)r->top.byte_offset * 100u) / r->text.size);
 }
 
-static int wrap_push(uint16_t lines[][NTEXTS_MAX_LINE_U16], uint32_t starts[], int *line,
-                     const uint16_t *buf, int len, uint32_t start) {
+typedef struct {
+    int left, right;
+    int first, last;
+} HitSpan;
+
+static int wrap_push(uint16_t lines[][NTEXTS_MAX_LINE_U16], HitSpan spans[],
+                     int *line, const uint16_t *buf, int len, HitSpan span) {
     if (*line >= 32) return 0;
     memcpy(lines[*line], buf, (len + 1) * sizeof(uint16_t));
-    starts[*line] = start;
+    spans[*line] = span;
     (*line)++;
     return 1;
+}
+
+static int reader_char_width(Reader *r, uint16_t ch) {
+    int width;
+    if (ch < 128) {
+        width = r->ascii_width[ch];
+    } else {
+        unsigned slot = ch & 255u;
+        width = r->wide_chars[slot] == ch ? r->wide_width[slot] : 0;
+    }
+    if (width) return width;
+    width = gui_gc_getCharWidth(r->gc, (gui_gc_Font)r->layout.font_size, (short)ch);
+    if (width <= 0) width = r->layout.font_size & 31;
+    if (ch < 128) {
+        r->ascii_width[ch] = width;
+    } else {
+        unsigned slot = ch & 255u;
+        r->wide_chars[slot] = ch;
+        r->wide_width[slot] = width;
+    }
+    return width;
 }
 
 static void draw_page(Reader *r) {
     const Theme *t = &themes[r->app->theme];
     TextDecoder d;
     uint16_t lines[32][NTEXTS_MAX_LINE_U16], linebuf[NTEXTS_MAX_LINE_U16], ch;
+    HitSpan spans[32], span = {-1, 0, 0, 0};
     int line = 0, len = 0, width = 0, maxw = SCREEN_W - r->layout.margin * 2;
-    uint32_t starts[32], off, line_start = r->top.byte_offset;
+    uint32_t off;
     char status[96];
     text_decoder_at(&r->text, &d, r->top);
-    memset(lines, 0, sizeof(lines));
     while (line < r->layout.lines_per_page && text_next(&d, &ch, &off)) {
         int cw;
         if (ch == '\r') continue;
         if (ch == '\n') {
             linebuf[len] = 0;
-            wrap_push(lines, starts, &line, linebuf, len, line_start);
+            wrap_push(lines, spans, &line, linebuf, len, span);
+            span = (HitSpan){-1, 0, 0, 0};
             len = width = 0;
-            line_start = d.offset;
             continue;
         }
         if (ch == '\t') ch = ' ';
         if (ch < 32) continue;
-        cw = gui_gc_getCharWidth(r->gc, (gui_gc_Font)r->layout.font_size, (short)ch);
-        if (cw <= 0) cw = r->layout.font_size & 31;
+        cw = reader_char_width(r, ch);
         if (len && width + cw > maxw) {
             linebuf[len] = 0;
-            wrap_push(lines, starts, &line, linebuf, len, line_start);
+            wrap_push(lines, spans, &line, linebuf, len, span);
+            span = (HitSpan){-1, 0, 0, 0};
             len = width = 0;
-            line_start = off;
             if (line >= r->layout.lines_per_page) break;
         }
-        if (len + 1 < NTEXTS_MAX_LINE_U16) linebuf[len++] = ch;
+        if (len + 1 < NTEXTS_MAX_LINE_U16) {
+            if (r->search_active && off >= r->hit_offset && off < r->hit_end) {
+                if (span.left < 0) {
+                    span.left = width;
+                    span.first = len;
+                }
+                span.right = width + cw;
+                span.last = len + 1;
+            }
+            linebuf[len++] = ch;
+        }
         width += cw;
     }
     if (line < r->layout.lines_per_page && len) {
         linebuf[len] = 0;
-        wrap_push(lines, starts, &line, linebuf, len, line_start);
+        wrap_push(lines, spans, &line, linebuf, len, span);
     }
 
     gui_gc_begin(r->gc);
@@ -430,21 +496,24 @@ static void draw_page(Reader *r) {
     gui_gc_fillRect(r->gc, 0, 0, SCREEN_W, SCREEN_H);
     for (int i = 0; i < line; ++i) {
         int y = r->layout.margin + i * r->layout.line_height;
-        if (r->hit_offset && starts[i] <= r->hit_offset &&
-            (i + 1 == line || starts[i + 1] > r->hit_offset)) {
+        draw_u16(r->gc, lines[i], r->layout.margin, y, (gui_gc_Font)r->layout.font_size, t->fg);
+        if (spans[i].left >= 0) {
+            uint16_t saved = lines[i][spans[i].last];
             set_color(r->gc, t->highlight_bg);
-            gui_gc_fillRect(r->gc, r->layout.margin - 2, y - 1, maxw + 4, r->layout.line_height);
-            draw_u16(r->gc, lines[i], r->layout.margin, y, (gui_gc_Font)r->layout.font_size, t->highlight_fg);
-        } else {
-            draw_u16(r->gc, lines[i], r->layout.margin, y, (gui_gc_Font)r->layout.font_size, t->fg);
+            gui_gc_fillRect(r->gc, r->layout.margin + spans[i].left - 1, y - 1,
+                            spans[i].right - spans[i].left + 2, r->layout.line_height);
+            lines[i][spans[i].last] = 0;
+            draw_u16(r->gc, lines[i] + spans[i].first, r->layout.margin + spans[i].left, y,
+                     (gui_gc_Font)r->layout.font_size, t->highlight_fg);
+            lines[i][spans[i].last] = saved;
         }
     }
     set_color(r->gc, t->muted);
     gui_gc_drawLine(r->gc, 0, SCREEN_H - 18, SCREEN_W, SCREEN_H - 18);
-    if (r->search_active && r->hit_offset) {
+    if (r->search_active) {
         snprintf(status, sizeof(status), "%s", TXT_SEARCH_MODE_HINT);
     } else {
-        snprintf(status, sizeof(status), "%lu/%lu页  %lu%%  %s",
+        snprintf(status, sizeof(status), L("%lu/%lu页  %lu%%  %s", "%lu/%lu pages  %lu%%  %s", "%lu/%lu pages  %lu%%  %s"),
                  (unsigned long)(r->page + 1), (unsigned long)r->index.page_count,
                  (unsigned long)percent_for_reader(r), text_encoding_name(r->text.encoding));
     }
@@ -454,6 +523,8 @@ static void draw_page(Reader *r) {
 }
 
 static void reader_goto(Reader *r, TextPosition pos) {
+    if (pos.byte_offset >= r->index.last_visible_end)
+        pos = index_position_for_page(&r->index, r->index.page_count - 1);
     r->top = text_safe_position(&r->text, pos.byte_offset, pos.source_line);
     r->page = index_page_for_offset(&r->index, r->top.byte_offset);
 }
@@ -489,7 +560,7 @@ static TextPosition position_for_line_exact(Reader *r, uint32_t line) {
 static void add_bookmark(Reader *r) {
     Bookmark *b;
     if (r->book.bookmark_count >= MAX_BOOKMARKS) {
-        app_message(r->gc, r->app, "书签", "书签已满，请先删除");
+        app_message(r->gc, r->app, L("书签", "Bookmarks", "Signets"), L("书签已满，请先删除", "Bookmark list full; delete one first", "Signets pleins ; supprimez-en un"));
         return;
     }
     b = &r->book.bookmarks[r->book.bookmark_count++];
@@ -498,11 +569,11 @@ static void add_bookmark(Reader *r) {
     b->timestamp = (uint32_t)time(NULL);
     text_make_excerpt(&r->text, r->top, b->excerpt, EXCERPT_LEN);
     save_reader(r);
-    app_message(r->gc, r->app, "书签", "已添加书签");
+    app_message(r->gc, r->app, L("书签", "Bookmarks", "Signets"), L("已添加书签", "Bookmark added", "Signet ajouté"));
 }
 
 static int choose_list_rows(Gc gc, AppState *app, const char *title, const char **items,
-                            const uint16_t *first, size_t stride, int count) {
+                            const uint16_t *first, size_t stride, int count, int zero_pick) {
     int sel = 0, top = 0, key, visible = 9;
     const Theme *t = &themes[app->theme];
     if (count <= 0) return -1;
@@ -522,7 +593,10 @@ static int choose_list_rows(Gc gc, AppState *app, const char *title, const char 
             if (items) draw_text(gc, items[row], 10, y, Regular10, color);
             else draw_u16(gc, first + (size_t)row * stride, 10, y, Regular10, color);
         }
-        draw_text(gc, TXT_FOOTER_LIST, 8, FOOTER_Y, Regular9, t->muted);
+        draw_text(gc, zero_pick >= 0 ?
+                  L("0编码  上下滚动  Enter选择  Esc返回", "0 encoding  Up/Down  Enter open  Esc back", "0 encodage  Haut/Bas  Enter ouvrir  Esc retour") :
+                  count > visible ? L("上下滚动  Enter选择  Esc返回", "Up/Down scroll  Enter open  Esc back", "Haut/Bas défiler  Enter ouvrir  Esc retour") :
+                  TXT_FOOTER_LIST, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         gui_gc_blit_to_screen(gc);
         key = wait_key(); wait_release();
@@ -530,6 +604,7 @@ static int choose_list_rows(Gc gc, AppState *app, const char *title, const char 
             int pick = key - 21;
             if (pick < count) return pick;
         }
+        if (key == 12 && zero_pick >= 0) return zero_pick;
         if (key == 1) {
             sel = sel > 0 ? sel - 1 : count - 1;
             if (sel < top) top = sel;
@@ -544,12 +619,12 @@ static int choose_list_rows(Gc gc, AppState *app, const char *title, const char 
 }
 
 static int choose_list(Gc gc, AppState *app, const char *title, const char **items, int count) {
-    return choose_list_rows(gc, app, title, items, NULL, 0, count);
+    return choose_list_rows(gc, app, title, items, NULL, 0, count, -1);
 }
 
 static int choose_u16_list(Gc gc, AppState *app, const char *title, const uint16_t *first,
                            size_t stride, int count) {
-    return choose_list_rows(gc, app, title, NULL, first, stride, count);
+    return choose_list_rows(gc, app, title, NULL, first, stride, count, -1);
 }
 
 static size_t append_u16(uint16_t *out, size_t capacity, size_t length, const uint16_t *text) {
@@ -565,10 +640,10 @@ static int manage_bookmarks(Reader *r) {
     int backfilled = 0;
     int i, pick;
     if (!r->book.bookmark_count) {
-        app_message(r->gc, r->app, "书签", "暂无书签");
+        app_message(r->gc, r->app, L("书签", "Bookmarks", "Signets"), L("暂无书签", "No bookmarks", "Aucun signet"));
         return 0;
     }
-    utf8_to_u16("（空白）", blank, (int)(sizeof(blank) / sizeof(blank[0])));
+    utf8_to_u16(L("（空白）", "(blank)", "(vide)"), blank, (int)(sizeof(blank) / sizeof(blank[0])));
     for (i = 0; i < (int)r->book.bookmark_count; ++i) {
         Bookmark *bookmark = &r->book.bookmarks[i];
         uint32_t percent = r->text.size ?
@@ -586,11 +661,11 @@ static int manage_bookmarks(Reader *r) {
         (void)length;
     }
     if (backfilled) save_reader(r);
-    pick = choose_u16_list(r->gc, r->app, "管理书签", labels[0],
+    pick = choose_u16_list(r->gc, r->app, L("管理书签", "Bookmarks", "Signets"), labels[0],
                            sizeof(labels[0]) / sizeof(labels[0][0]), r->book.bookmark_count);
     if (pick >= 0) {
-        const char *actions[] = {"跳转", "删除", "取消"};
-        int ans = choose_list(r->gc, r->app, "书签操作", actions, 3);
+        const char *actions[] = {L("跳转", "Go to", "Aller à"), L("删除", "Delete", "Supprimer"), L("取消", "Cancel", "Annuler")};
+        int ans = choose_list(r->gc, r->app, L("书签操作", "Bookmark action", "Action sur le signet"), actions, 3);
         if (ans == 0) {
             reader_goto(r, r->book.bookmarks[pick].position);
             save_reader(r);
@@ -629,6 +704,7 @@ static int request_u16_input(const char *title, const char *message, const uint1
     string_set_utf16(s_msg, (const char *)msg_u16);
     string_set_utf16(request_value, (const char *)(initial ? initial : empty));
     no_error = _show_msgUserInput(0, request_struct, s_title->str, s_msg->str);
+    wait_release();
     if (no_error && request_value->len > 0 && request_value->str) {
         const uint16_t *source = (const uint16_t *)request_value->str;
         size_t length = 0;
@@ -648,7 +724,7 @@ static int request_u16_input(const char *title, const char *message, const uint1
 static int query_from_user(Reader *r, uint16_t *query) {
     static const uint16_t empty[1] = {0};
     const uint16_t *initial = r->app->history_count ? r->app->history[0] : empty;
-    return request_u16_input("搜索", "输入搜索词", initial, query, QUERY_LEN);
+    return request_u16_input(L("搜索", "Search", "Recherche"), L("输入搜索词", "Search for", "Texte à chercher"), initial, query, QUERY_LEN);
 }
 
 
@@ -663,8 +739,9 @@ static uint32_t next_char_offset(Reader *r, TextPosition pos) {
 
 static int do_search(Reader *r, int direction, int reuse) {
     uint32_t hit;
-    uint16_t query[QUERY_LEN];
-    uint32_t anchor;
+    uint16_t query[QUERY_LEN], value;
+    TextDecoder match;
+    uint32_t anchor, off;
     int continuing;
     memcpy(query, r->last_query, sizeof(query));
     if (reuse && !query[0] && r->app->history_count)
@@ -677,23 +754,27 @@ static int do_search(Reader *r, int direction, int reuse) {
         if (!storage_save_app(r->app, r->data_dir))
             debug_fail_errno("do_search:save_history", r->data_dir);
     }
-    continuing = reuse && r->hit_offset;
+    continuing = reuse && r->search_active;
     if (direction >= 0) {
         uint32_t from = continuing ?
             next_char_offset(r, (TextPosition){r->hit_offset, r->top.source_line}) :
             r->top.byte_offset;
         if (!text_find_forward(&r->text, query, from, &hit)) {
-            app_message(r->gc, r->app, "搜索", continuing ? TXT_SEARCH_NO_NEXT : TXT_SEARCH_NOT_FOUND);
+            app_message(r->gc, r->app, L("搜索", "Search", "Recherche"), continuing ? TXT_SEARCH_NO_NEXT : TXT_SEARCH_NOT_FOUND);
             return 0;
         }
     } else {
         anchor = continuing ? r->hit_offset : r->top.byte_offset;
-        if (!text_find_backward(&r->text, query, anchor, &hit)) {
-            app_message(r->gc, r->app, "搜索", continuing ? TXT_SEARCH_NO_PREV : TXT_SEARCH_NOT_FOUND);
+        if (!text_find_backward(&r->text, query, anchor, r->index.pages, r->index.page_count, &hit)) {
+            app_message(r->gc, r->app, L("搜索", "Search", "Recherche"), continuing ? TXT_SEARCH_NO_PREV : TXT_SEARCH_NOT_FOUND);
             return 0;
         }
     }
+    text_decoder_at(&r->text, &match, (TextPosition){hit, r->top.source_line});
+    for (int i = 0; query[i]; ++i)
+        if (!text_next(&match, &value, &off)) break;
     r->hit_offset = hit;
+    r->hit_end = match.offset;
     r->search_active = 1;
     reader_goto(r, index_position_for_offset(&r->index, hit));
     return 1;
@@ -713,22 +794,29 @@ static void do_chapter_jump(Reader *r) {
     if (pick >= 0) reader_goto(r, r->index.chapters[pick].position);
 }
 
+static void reader_chapter_step(Reader *r, int direction) {
+    TextPosition pos;
+    if (index_chapter_for_offset(&r->index, r->top.byte_offset, direction, &pos))
+        reader_goto(r, pos);
+}
+
 static void do_jump(Reader *r) {
-    const char *items[] = {"百分比", "页码", "物理行号", TXT_CHAPTER_DIRECTORY};
-    int pick = choose_list(r->gc, r->app, "跳转", items, 4);
+    const char *items[] = {L("百分比", "Percent", "Pourcentage"), L("页码", "Page", "Page"),
+                           L("物理行号", "Source line", "Ligne source"), TXT_CHAPTER_DIRECTORY};
+    int pick = choose_list(r->gc, r->app, L("跳转", "Go to", "Aller à"), items, 4);
     int value = 0;
     if (pick < 0) return;
     if (pick == 0) {
         value = (int)percent_for_reader(r);
-        if (show_1numeric_input("跳转", "", "百分比 0-100", &value, 0, 100))
+        if (show_1numeric_input(L("跳转", "Go to", "Aller à"), "", L("百分比 0-100", "Percent 0-100", "Pourcentage 0-100"), &value, 0, 100))
             reader_goto(r, index_position_for_percent(&r->index, value));
     } else if (pick == 1) {
         value = (int)r->page + 1;
-        if (show_1numeric_input("跳转", "", "页码", &value, 1, (int)r->index.page_count))
+        if (show_1numeric_input(L("跳转", "Go to", "Aller à"), "", L("页码", "Page", "Page"), &value, 1, (int)r->index.page_count))
             reader_goto(r, index_position_for_page(&r->index, (uint32_t)value - 1));
     } else if (pick == 2) {
         value = (int)r->top.source_line;
-        if (show_1numeric_input("跳转", "", "原始物理行号", &value, 1, (int)r->index.total_source_lines))
+        if (show_1numeric_input(L("跳转", "Go to", "Aller à"), "", L("原始物理行号", "Source line", "Ligne source"), &value, 1, (int)r->index.total_source_lines))
             reader_goto(r, position_for_line_exact(r, (uint32_t)value));
     } else {
         do_chapter_jump(r);
@@ -751,6 +839,10 @@ static int apply_setting_change(Reader *r, AppState *app, const char *data_dir, 
     if (r) {
         uint32_t pct = percent_for_reader(r);
         r->layout = layout_from_state(r->app);
+        if (pick == 0) {
+            memset(r->ascii_width, 0, sizeof(r->ascii_width));
+            memset(r->wide_chars, 0, sizeof(r->wide_chars));
+        }
         index_free(&r->index);
         if (!ensure_index(r)) return -1;
         reader_goto(r, index_position_for_percent(&r->index, pct));
@@ -785,7 +877,7 @@ static int manage_chapter_rules(Gc gc, AppState *app, const char *data_dir, Read
         else if (result == -2) app_message(gc, app, TXT_CHAPTER_RULES, TXT_RULE_FULL);
         else app_message(gc, app, TXT_CHAPTER_RULES, TXT_RULE_INVALID);
     } else {
-        const char *actions[] = {"删除", "取消"};
+        const char *actions[] = {L("删除", "Delete", "Supprimer"), L("取消", "Cancel", "Annuler")};
         if (choose_list(gc, app, TXT_CHAPTER_RULES, actions, 2) == 0)
             changed = chapter_rules_remove(&app->chapter_rules, (uint32_t)pick - 1);
     }
@@ -806,17 +898,21 @@ static int manage_chapter_rules(Gc gc, AppState *app, const char *data_dir, Read
 
 static void about_page(Gc gc, AppState *app) {
     const Theme *t = &themes[app->theme];
+    char line[96];
     for (;;) {
         int key;
         gui_gc_begin(gc);
         set_color(gc, t->bg);
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
-        draw_text(gc, "关于 nTexts", 10, 8, Bold12, t->fg);
-        draw_text(gc, "nTexts 中文阅读器", 10, 48, Regular10, t->fg);
-        draw_text(gc, "版本: Beta Testing v0.0.1", 10, 78, Regular10, t->fg);
-        draw_text(gc, "作者: Ziyang-Bai", 10, 108, Regular10, t->fg);
-        draw_text(gc, "Copyright (c) 2026 Ziyang-Bai", 10, 140, Regular9, t->fg);
-        draw_text(gc, "License: GNU GPL v3.0", 10, 160, Regular9, t->fg);
+        draw_text(gc, L("关于 nTexts", "About nTexts", "À propos de nTexts"), 10, 8, Bold12, t->fg);
+        draw_text(gc, L("nTexts阅读器", "nTexts Text Reader", "nTexts Lecteur de textes"), 10, 42, Regular10, t->fg);
+        snprintf(line, sizeof(line), L("版本: %s", "Version: %s", "Version : %s"), build_version);
+        draw_text(gc, line, 10, 68, Regular10, t->fg);
+        snprintf(line, sizeof(line), L("提交: %.12s", "Commit: %.12s", "Révision : %.12s"), build_commit);
+        draw_text(gc, line, 10, 92, Regular9, t->fg);
+        draw_text(gc, L("作者: Ziyang-Bai", "Author: Ziyang-Bai", "Auteur : Ziyang-Bai"), 10, 118, Regular10, t->fg);
+        draw_text(gc, "Copyright (c) 2026 Ziyang-Bai", 10, 146, Regular9, t->fg);
+        draw_text(gc, L("许可证: GNU GPL v3.0", "License: GNU GPL v3.0", "Licence : GNU GPL v3.0"), 10, 166, Regular9, t->fg);
         draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         gui_gc_blit_to_screen(gc);
@@ -828,55 +924,99 @@ static void about_page(Gc gc, AppState *app) {
 
 static void usage_page(Gc gc, AppState *app) {
     const Theme *t = &themes[app->theme];
+    static const char *zh_pages[][8] = {
+        {"主页与阅读", "0 浏览 Documents，Enter 打开最近阅读",
+         "浏览器上下选文件，Enter 打开或进入目录",
+         "F按文件名筛选，0清除筛选",
+         "左右翻页，上下按物理行移动",
+         "Ctrl+上/下 跳到开头/结尾",
+         "Menu 功能菜单，Esc 返回书库",
+         "阅读进度自动保存，重新打开可续读"},
+        {"搜索与书签", "F 输入搜索词并跳到结果",
+         "搜索中 Enter/下 找下一处，上找上一处",
+         "Menu 中向后/向前查找沿用搜索词",
+         "B 添加当前位置书签",
+         "Menu 管理书签可跳转或删除",
+         "命中词精确高亮，跨页可左右查看", NULL},
+        {"跳转与设置", "G 按百分比、页码、物理行号跳转",
+         "G 进入章节目录，Ctrl+左/右 换章",
+         "主页 (-) 或阅读 Menu 打开设置",
+         "设置第8项切换中文/English/Français",
+         "阅读 Menu 按0手动选择单本编码",
+         "编码: 自动/UTF-8/GB18030/UTF-16LE/BE",
+         "章节规则: *多字符，?单字符"}
+    };
+    static const char *en_pages[][8] = {
+        {"Home and reading", "0 browse Documents; Enter resumes a book",
+         "Up/Down pick; Enter opens file/folder",
+         "Browser: F filters names; 0 clears filter",
+         "Left/Right pages; Up/Down source lines",
+         "Ctrl+Up/Down jumps to start/end",
+         "Menu for actions; Esc returns home",
+         "Progress saves automatically"},
+        {"Search and bookmarks", "F searches text",
+         "Search: Enter/Down next; Up previous",
+         "Menu repeats forward/backward search",
+         "B bookmarks this position",
+         "Menu manages bookmarks: go to or delete",
+         "Matches are highlighted across pages", NULL},
+        {"Go to and settings", "G goes to percent, page or source line",
+         "G lists chapters; Ctrl+Left/Right changes chapter",
+         "Home (-) or reader Menu opens settings",
+         "Settings item 8: Chinese/English/Français",
+         "Reader Menu: 0 picks this book's encoding",
+         "Auto, UTF-8, GB18030, UTF-16 LE/BE",
+         "Chapter rules: * many, ? one character"}
+    };
+    static const char *fr_pages[][8] = {
+        {"Accueil et lecture", "0 parcourt Documents ; Enter reprend un livre",
+         "Haut/Bas : choisir ; Enter : ouvrir",
+         "F filtre les noms ; 0 efface le filtre",
+         "Gauche/Droite : pages ; Haut/Bas : lignes",
+         "Ctrl+Haut/Bas : début/fin du texte",
+         "Menu : actions ; Esc : accueil",
+         "La progression est sauvegardée"},
+        {"Recherche et signets", "F cherche dans le texte",
+         "Enter/Bas : suivant ; Haut : précédent",
+         "Menu relance la recherche dans les 2 sens",
+         "B ajoute un signet ici",
+         "Menu : voir, rejoindre ou supprimer un signet",
+         "Résultats surlignés même entre pages", NULL},
+        {"Navigation et réglages", "G : pourcentage, page ou ligne source",
+         "G : chapitres ; Ctrl+Gauche/Droite : chapitre",
+         "(-) accueil ou Menu lecture : réglages",
+         "Réglage 8 : 中文/English/Français",
+         "Menu lecture, 0 : encodage du livre",
+         "Auto, UTF-8, GB18030, UTF-16 LE/BE",
+         "Règles : * plusieurs, ? un caractère"}
+    };
+    const char *(*pages)[8] = app_locale == 2 ? fr_pages : app_locale == 1 ? en_pages : zh_pages;
+    int page = 0;
     for (;;) {
         int key;
         gui_gc_begin(gc);
         set_color(gc, t->bg);
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
-        draw_text(gc, "使用说明", 10, 8, Bold12, t->fg);
-        draw_text(gc, "主页: " TXT_ENTER_OPEN "，" TXT_HOME_BROWSE_DOCS "，" TXT_SETTINGS, 10, 42, Regular9, t->fg);
-        draw_text(gc, "阅读: 左右翻页，上下逐行移动", 10, 66, Regular9, t->fg);
-        draw_text(gc, "Ctrl+上/下 跳到开头/结尾", 10, 90, Regular9, t->fg);
-        draw_text(gc, "Menu打开功能菜单，" TXT_ESC_BACK, 10, 114, Regular9, t->fg);
-        draw_text(gc, "快捷键: B书签  F搜索  G跳转/章节", 10, 138, Regular9, t->fg);
-        draw_text(gc, "章节规则: *多字符，?单字符，整行匹配", 10, 162, Regular9, t->fg);
-        draw_text(gc, "支持UTF-8、GB18030、带BOM的UTF-16", 10, 186, Regular9, t->fg);
-        draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
+        draw_text(gc, pages[page][0], 10, 8, Bold12, t->fg);
+        for (int i = 1; i < 8 && pages[page][i]; ++i)
+            draw_text(gc, pages[page][i], 10, 20 + i * 23, Regular9, t->fg);
+        draw_text(gc, L("左右切换  Enter/Esc返回", "Left/Right pages  Enter/Esc back", "Gauche/Droite pages  Enter/Esc retour"), 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         gui_gc_blit_to_screen(gc);
         key = wait_key();
         wait_release();
         if (key == 5 || key == 6) return;
+        if (key == 3 && page > 0) --page;
+        if (key == 4 && page < 2) ++page;
     }
 }
 
 typedef enum {
     TUTORIAL_SCREEN_HOME,
-    TUTORIAL_SCREEN_HOME_RECENT,
     TUTORIAL_SCREEN_BROWSER,
     TUTORIAL_SCREEN_BROWSER_SELECTED,
-    TUTORIAL_SCREEN_LOADING,
     TUTORIAL_SCREEN_READER,
-    TUTORIAL_SCREEN_READER_PAGE2,
-    TUTORIAL_SCREEN_READER_TOP,
-    TUTORIAL_SCREEN_READER_END,
-    TUTORIAL_SCREEN_SEARCH,
-    TUTORIAL_SCREEN_SEARCH_NEXT,
-    TUTORIAL_SCREEN_JUMP,
-    TUTORIAL_SCREEN_JUMP_INPUT,
-    TUTORIAL_SCREEN_JUMP_RESULT,
-    TUTORIAL_SCREEN_BOOKMARK,
-    TUTORIAL_SCREEN_BOOKMARK_LIST,
-    TUTORIAL_SCREEN_BOOKMARK_ACTION,
-    TUTORIAL_SCREEN_BOOKMARK_JUMP,
-    TUTORIAL_SCREEN_BOOKMARK_DELETE,
-    TUTORIAL_SCREEN_FILE_INFO,
-    TUTORIAL_SCREEN_MENU,
-    TUTORIAL_SCREEN_SETTINGS,
-    TUTORIAL_SCREEN_SETTINGS_FONT,
-    TUTORIAL_SCREEN_SETTINGS_THEME,
-    TUTORIAL_SCREEN_SETTINGS_MARGIN,
-    TUTORIAL_SCREEN_TRANSFER
+    TUTORIAL_SCREEN_READER_PAGE2
 } TutorialScreen;
 
 typedef struct {
@@ -885,35 +1025,17 @@ typedef struct {
     const char *body1;
     const char *body2;
     int key;
-    int need_ctrl;
     int x, y, w, h;
 } TutorialStep;
 
 static const char *tutorial_key_label(const TutorialStep *step) {
-    if (step->need_ctrl && step->key == 1) return "Ctrl+上";
-    if (step->need_ctrl && step->key == 2) return "Ctrl+下";
     switch (step->key) {
-        case 1: return "上";
-        case 2: return "下";
-        case 3: return "左";
-        case 4: return "右";
+        case 2: return L("下", "Down", "Bas");
+        case 3: return L("左", "Left", "Gauche");
+        case 4: return L("右", "Right", "Droite");
         case 5: return "Enter";
         case 6: return "Esc";
-        case 7: return "Menu";
-        case 8: return "B";
-        case 9: return "F";
-        case 10: return "G";
         case 12: return "0";
-        case 13: return "(-)";
-        case 21: return "1";
-        case 22: return "2";
-        case 23: return "3";
-        case 24: return "4";
-        case 25: return "5";
-        case 26: return "6";
-        case 27: return "7";
-        case 28: return "8";
-        case 29: return "9";
         default: return "Enter";
     }
 }
@@ -921,200 +1043,68 @@ static const char *tutorial_key_label(const TutorialStep *step) {
 static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
     set_color(gc, t->bg);
     gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
-    if (screen == TUTORIAL_SCREEN_HOME || screen == TUTORIAL_SCREEN_HOME_RECENT) {
-        draw_text(gc, "nTexts 中文阅读器", 8, 6, Bold12, t->fg);
-        draw_text(gc, "最近阅读", 8, 32, Bold10, t->fg);
-        if (screen == TUTORIAL_SCREEN_HOME_RECENT) {
-            set_color(gc, t->highlight_bg);
-            gui_gc_fillRect(gc, 4, 52, SCREEN_W - 8, 20);
-        }
+    if (screen == TUTORIAL_SCREEN_HOME) {
+        draw_text(gc, L("nTexts阅读器", "nTexts Text Reader", "nTexts Lecteur de textes"), 8, 6, Bold12, t->fg);
+        draw_text(gc, L("最近阅读", "Recent books", "Lectures récentes"), 8, 32, Bold10, t->fg);
         draw_text(gc, "1. tutorial_demo.txt.tns  12%", 10, 54, Regular10, t->fg);
         draw_text(gc, TXT_HOME_BROWSE_DOCS, 10, 96, Regular10, t->fg);
         draw_text(gc, TXT_SETTINGS, 10, 118, Regular10, t->fg);
         draw_text(gc, TXT_FOOTER_HOME, 8, FOOTER_Y, Regular9, t->muted);
     } else if (screen == TUTORIAL_SCREEN_BROWSER || screen == TUTORIAL_SCREEN_BROWSER_SELECTED) {
         draw_text(gc, "Documents", 8, 6, Bold10, t->fg);
-        draw_text(gc, "[目录] Books", 10, 32, Regular10, t->fg);
-        if (screen == TUTORIAL_SCREEN_BROWSER_SELECTED) {
+        if (screen == TUTORIAL_SCREEN_BROWSER) {
+            set_color(gc, t->highlight_bg);
+            gui_gc_fillRect(gc, 4, 30, SCREEN_W - 8, 20);
+        } else {
             set_color(gc, t->highlight_bg);
             gui_gc_fillRect(gc, 4, 52, SCREEN_W - 8, 20);
         }
+        draw_text(gc, L("[目录] Books", "[Folder] Books", "[Dossier] Books"), 10, 32, Regular10, t->fg);
         draw_text(gc, "tutorial_demo.txt.tns", 10, 54, Regular10, t->fg);
         draw_text(gc, "notes.txt.tns", 10, 76, Regular10, t->fg);
         draw_text(gc, TXT_FOOTER_BROWSER, 8, FOOTER_Y, Regular9, t->muted);
-    } else if (screen == TUTORIAL_SCREEN_LOADING) {
-        draw_text(gc, "正在加载 tutorial_demo.txt.tns", 34, 84, Regular10, t->fg);
-        draw_text(gc, "首次索引: 42%  Esc取消", 52, 108, Regular10, t->fg);
-        draw_text(gc, "支持UTF-8、GB18030和带BOM的UTF-16", 30, 132, Regular9, t->fg);
-        draw_text(gc, "UTF-16 自动识别大端/小端", 48, 154, Regular9, t->muted);
-    } else if (screen == TUTORIAL_SCREEN_READER || screen == TUTORIAL_SCREEN_READER_PAGE2 ||
-               screen == TUTORIAL_SCREEN_READER_TOP || screen == TUTORIAL_SCREEN_READER_END ||
-               screen == TUTORIAL_SCREEN_SEARCH || screen == TUTORIAL_SCREEN_SEARCH_NEXT ||
-               screen == TUTORIAL_SCREEN_JUMP || screen == TUTORIAL_SCREEN_JUMP_INPUT ||
-               screen == TUTORIAL_SCREEN_JUMP_RESULT || screen == TUTORIAL_SCREEN_BOOKMARK ||
-               screen == TUTORIAL_SCREEN_BOOKMARK_JUMP) {
-        const char *page = "1/8页  12%  UTF-8";
-        draw_text(gc, "nTexts 教学演示文档", 10, 12, Bold10, t->fg);
-        if (screen == TUTORIAL_SCREEN_READER_PAGE2) {
-            page = "2/8页  25%  UTF-8";
-            draw_wrapped_text(gc, "这是第二页。刚才按右键以后，页面已经前进。", 10, 40,
-                              SCREEN_W - 20, Regular10, t->fg);
-            draw_wrapped_text(gc, "再按左键就会回到上一页。", 10, 86, SCREEN_W - 20, Regular10, t->fg);
-        } else if (screen == TUTORIAL_SCREEN_READER_TOP) {
-            page = "1/8页  0%  UTF-8";
-            draw_wrapped_text(gc, "Ctrl+上 已经把阅读位置带回开头。", 10, 40,
-                              SCREEN_W - 20, Regular10, t->fg);
-            draw_wrapped_text(gc, "这种跳转不会丢失书签和设置。", 10, 86, SCREEN_W - 20, Regular10, t->fg);
-        } else if (screen == TUTORIAL_SCREEN_READER_END) {
-            page = "8/8页  100%  UTF-8";
-            draw_wrapped_text(gc, "Ctrl+下 已经跳到结尾。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
-            draw_wrapped_text(gc, "适合快速检查文档末尾。", 10, 86, SCREEN_W - 20, Regular10, t->fg);
-        } else if (screen == TUTORIAL_SCREEN_JUMP) {
-            draw_text(gc, "跳转", 8, 36, Bold10, t->fg);
-            set_color(gc, t->highlight_bg);
-            gui_gc_fillRect(gc, 14, 62, 116, 20);
-            draw_text(gc, "1. 百分比", 18, 66, Regular10, t->fg);
-            draw_text(gc, "2. 页码", 18, 90, Regular10, t->fg);
-            draw_text(gc, "3. 物理行号", 18, 114, Regular10, t->fg);
-            draw_text(gc, "4. 章节目录", 18, 138, Regular10, t->fg);
-        } else if (screen == TUTORIAL_SCREEN_JUMP_INPUT) {
-            draw_text(gc, "跳转到百分比", 8, 42, Bold10, t->fg);
-            draw_text(gc, "输入: 50", 28, 78, Regular10, t->fg);
-            draw_text(gc, "确认后会跳到全书中间。", 28, 110, Regular9, t->muted);
-        } else if (screen == TUTORIAL_SCREEN_JUMP_RESULT) {
-            page = "4/8页  50%  UTF-8";
-            draw_wrapped_text(gc, "已经跳到 50% 附近。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
-            draw_wrapped_text(gc, "页码、百分比、物理行号和章节目录都可跳转。", 10, 82, SCREEN_W - 20, Regular10, t->fg);
-        } else if (screen == TUTORIAL_SCREEN_BOOKMARK) {
-            draw_wrapped_text(gc, "已在当前位置添加书签。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
-            draw_wrapped_text(gc, "以后可在 Menu 的管理书签里返回这里。", 10, 86, SCREEN_W - 20, Regular10, t->fg);
-        } else if (screen == TUTORIAL_SCREEN_BOOKMARK_JUMP) {
-            page = "2/8页  25%  UTF-8";
-            draw_wrapped_text(gc, "已经跳回刚才那个书签。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
-            draw_wrapped_text(gc, "书签适合记住章节或重要位置。", 10, 82, SCREEN_W - 20, Regular10, t->fg);
-        } else if (screen == TUTORIAL_SCREEN_SEARCH || screen == TUTORIAL_SCREEN_SEARCH_NEXT) {
-            const char *hit = screen == TUTORIAL_SCREEN_SEARCH ? "找到的内容会这样标出来。" : "这里是下一处结果，页面已经跟着跳过去了。";
-            page = screen == TUTORIAL_SCREEN_SEARCH ? "3/8页  搜索中" : "5/8页  搜索中";
-            draw_wrapped_text(gc, "输入要找的词，nTexts 会跳到第一个结果。", 10, 40, SCREEN_W - 20, Regular10, t->fg);
-            set_color(gc, t->highlight_bg);
-            gui_gc_fillRect(gc, 8, 66, SCREEN_W - 16, 22);
-            draw_text(gc, hit, 10, 68, Regular10, t->highlight_fg);
-            draw_text(gc, "Enter/下 找下一处", 6, SCREEN_H - 28, Regular9, t->muted);
-            draw_text(gc, "上 找上一处  Esc退出", 6, SCREEN_H - 14, Regular9, t->muted);
-        } else {
-            draw_wrapped_text(gc, "按快捷键可以搜索、跳转、书签和打开菜单。", 10, 68,
-                              SCREEN_W - 20, Regular10, t->fg);
-        }
-        if (screen != TUTORIAL_SCREEN_SEARCH && screen != TUTORIAL_SCREEN_SEARCH_NEXT)
-            draw_text(gc, page, 6, SCREEN_H - 15, Regular9, t->muted);
-    } else if (screen == TUTORIAL_SCREEN_BOOKMARK_LIST || screen == TUTORIAL_SCREEN_BOOKMARK_ACTION ||
-               screen == TUTORIAL_SCREEN_BOOKMARK_DELETE) {
-        draw_text(gc, screen == TUTORIAL_SCREEN_BOOKMARK_ACTION ? "书签操作" : "管理书签", 8, 6, Bold10, t->fg);
-        if (screen == TUTORIAL_SCREEN_BOOKMARK_LIST) {
-            set_color(gc, t->highlight_bg);
-            gui_gc_fillRect(gc, 4, 34, SCREEN_W - 8, 20);
-            draw_text(gc, "01 25%  教学演示文档第二章", 10, 36, Regular10, t->fg);
-            draw_text(gc, TXT_FOOTER_LIST, 8, FOOTER_Y, Regular9, t->muted);
-        } else if (screen == TUTORIAL_SCREEN_BOOKMARK_ACTION) {
-            set_color(gc, t->highlight_bg);
-            gui_gc_fillRect(gc, 4, 34, SCREEN_W - 8, 20);
-            draw_text(gc, "1. 跳转", 10, 36, Regular10, t->fg);
-            draw_text(gc, "2. 删除", 10, 58, Regular10, t->fg);
-            draw_text(gc, "3. 取消", 10, 80, Regular10, t->fg);
-            draw_text(gc, TXT_FOOTER_LIST, 8, FOOTER_Y, Regular9, t->muted);
-        } else {
-            draw_text(gc, "书签已删除", 10, 54, Regular10, t->fg);
-            draw_text(gc, "这里暂时没有书签。", 10, 84, Regular10, t->muted);
-            draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
-        }
-    } else if (screen == TUTORIAL_SCREEN_FILE_INFO) {
-        draw_text(gc, "文件信息", 10, 8, Bold12, t->fg);
-        draw_text(gc, "名称: tutorial_demo.txt.tns", 10, 42, Regular10, t->fg);
-        draw_text(gc, "路径:", 10, 68, Regular10, t->fg);
-        draw_wrapped_text(gc, "/documents/nTexts/tutorial_demo.txt.tns", 10, 90, SCREEN_W - 20, Regular9, t->fg);
-        draw_text(gc, "大小: 2048 字节", 10, 128, Regular9, t->fg);
-        draw_text(gc, "编码: UTF-8", 10, 146, Regular9, t->fg);
-        draw_text(gc, "行数: 48", 10, 164, Regular9, t->fg);
-        draw_text(gc, "页数: 8", 10, 182, Regular9, t->fg);
-        draw_text(gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
-    } else if (screen == TUTORIAL_SCREEN_MENU) {
-        const char *items[] = {"1. 添加书签", "2. 管理书签", "3. 搜索", "4. 向后查找",
-                               "5. 向前查找", "6. 跳转", "7. 阅读设置", "8. 文件信息", "9. 返回书库"};
-        draw_text(gc, "功能菜单", 8, 6, Bold10, t->fg);
-        for (int i = 0; i < 9; ++i) draw_text(gc, items[i], 10, 30 + i * 19, Regular9, t->fg);
-        draw_text(gc, TXT_FOOTER_LIST, 8, FOOTER_Y, Regular9, t->muted);
-    } else if (screen == TUTORIAL_SCREEN_SETTINGS || screen == TUTORIAL_SCREEN_SETTINGS_FONT ||
-               screen == TUTORIAL_SCREEN_SETTINGS_THEME || screen == TUTORIAL_SCREEN_SETTINGS_MARGIN) {
-        draw_text(gc, "阅读设置", 8, 6, Bold12, t->fg);
-        draw_text(gc, screen == TUTORIAL_SCREEN_SETTINGS_FONT ? "1. 字号: 小/中/大  当前:大" : "1. 字号: 小/中/大  当前:中", 10, 32, Regular10, t->fg);
-        draw_text(gc, screen == TUTORIAL_SCREEN_SETTINGS_THEME ? "2. 主题: 浅色/深色/护眼  当前:护眼" : "2. 主题: 浅色/深色/护眼  当前:浅色", 10, 54, Regular10, t->fg);
-        draw_text(gc, screen == TUTORIAL_SCREEN_SETTINGS_MARGIN ? "3. 边距: 窄/宽  当前:宽" : "3. 边距: 窄/宽  当前:窄", 10, 76, Regular10, t->fg);
-        draw_text(gc, "4. 章节规则: 自定义0条", 10, 98, Regular10, t->fg);
-        draw_text(gc, "5. 关于", 10, 120, Regular10, t->fg);
-        draw_text(gc, "6. 使用说明", 10, 142, Regular10, t->fg);
-        draw_text(gc, "7. 重置教学进度", 10, 164, Regular10, t->fg);
     } else {
-        draw_text(gc, "传入自己的文档", 8, 8, Bold12, t->fg);
-        draw_text(gc, "1. 将 nTexts.tns 传入计算器", 10, 42, Regular9, t->fg);
-        draw_text(gc, "2. 把你的文本放入 Documents", 10, 66, Regular9, t->fg);
-        draw_text(gc, "3. 也可以放进子文件夹整理", 10, 90, Regular9, t->fg);
-        draw_text(gc, "4. 回到 nTexts 浏览并打开", 10, 114, Regular9, t->fg);
+        draw_text(gc, L("nTexts 教学演示文档", "nTexts tutorial text", "Texte de démonstration nTexts"), 10, 12, Bold10, t->fg);
+        if (screen == TUTORIAL_SCREEN_READER_PAGE2) {
+            draw_wrapped_text(gc, L("这是第二页。刚才按右键以后，页面已经前进。",
+                                    "This is page two. Right advanced the page.",
+                                    "Voici la deuxième page. Droite avance."), 10, 40,
+                              SCREEN_W - 20, Regular10, t->fg);
+            draw_wrapped_text(gc, L("再按左键就会回到上一页。", "Left returns to the previous page.",
+                                    "Gauche revient à la page précédente."), 10, 86,
+                              SCREEN_W - 20, Regular10, t->fg);
+            draw_text(gc, L("2/8页  25%  UTF-8", "2/8 pages  25%  UTF-8", "2/8 pages  25%  UTF-8"), 6, SCREEN_H - 15, Regular9, t->muted);
+        } else {
+            draw_wrapped_text(gc, L("这是第一页。按右键翻到下一页。",
+                                    "This is page one. Press Right for the next page.",
+                                    "Première page. Droite passe à la suivante."), 10, 40,
+                              SCREEN_W - 20, Regular10, t->fg);
+            draw_wrapped_text(gc, L("阅读进度会自动保存。", "Progress saves automatically.",
+                                    "La progression est sauvegardée."), 10, 86,
+                              SCREEN_W - 20, Regular10, t->fg);
+            draw_text(gc, L("1/8页  12%  UTF-8", "1/8 pages  12%  UTF-8", "1/8 pages  12%  UTF-8"), 6, SCREEN_H - 15, Regular9, t->muted);
+        }
     }
 }
 
 static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
     const Theme *t = &themes[app->theme];
     const TutorialStep steps[] = {
-        {TUTORIAL_SCREEN_TRANSFER, "安装和传书", "先把 nTexts.tns 传进计算器。", "再把想看的文本放进 Documents。", 5, 0, 8, 34, 304, 104},
-        {TUTORIAL_SCREEN_HOME, "主页", "这里显示最近阅读、浏览文档和设置。", "按 0 直接进入 Documents 浏览器。", 12, 0, 6, 92, 180, 22},
-        {TUTORIAL_SCREEN_BROWSER, "浏览文档", "浏览器只显示目录、.txt 和 .txt.tns。", "上下移动光标。", 2, 0, 6, 50, 220, 24},
-        {TUTORIAL_SCREEN_BROWSER_SELECTED, "进入或打开", "选中文件夹时 Enter 进入。", "选中文本文件时 Enter 打开。", 5, 0, 6, 50, 220, 24},
-        {TUTORIAL_SCREEN_LOADING, "加载和索引", "支持 UTF-8、GB18030 和带BOM的 UTF-16。", "UTF-16 大端/小端会自动识别。", 5, 0, 42, 96, 236, 64},
-        {TUTORIAL_SCREEN_READER, "阅读正文", "这是阅读区。", "左右翻页，上下按原文本物理行移动。", 4, 0, 6, 8, 308, 176},
-        {TUTORIAL_SCREEN_READER_PAGE2, "返回上一页", "阅读进度将会保存，", "重新进入将会自动续读。", 3, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER, "快捷跳到开头", "先回到了第一页。", "Ctrl+上 会跳到整本书开头。", 1, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER_TOP, "快捷跳到结尾", "现在已经在开头。", "Ctrl+下 会跳到整本书结尾。", 2, 1, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER_END, "搜索快捷键", "已经跳到结尾。", "按 F 搜索文字，找到后会直接跳过去并标出来。", 9, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_SEARCH, "继续找下一个", "现在已经找到一处。", "按 Enter 或下键继续找下一个，上键回到上一个。", 5, 0, 6, 62, 308, 30},
-        {TUTORIAL_SCREEN_SEARCH_NEXT, "回到上一个结果", "页面已经跳到下一处结果。", "如果跳过头了，按上键回到上一处。", 1, 0, 6, 62, 308, 30},
-        {TUTORIAL_SCREEN_READER, "跳转快捷键", "G 打开跳转。", "可按百分比、页码、物理行号或章节目录跳转。", 10, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_JUMP, "跳转菜单", "先选择跳转方式。", "这里选百分比。", 21, 0, 14, 62, 116, 20},
-        {TUTORIAL_SCREEN_JUMP_INPUT, "输入跳转位置", "输入 50，表示跳到全书中间。", "确认后就会过去。", 5, 0, 24, 72, 180, 48},
-        {TUTORIAL_SCREEN_JUMP_RESULT, "已经跳转", "现在到了 50% 附近。", "实际阅读时会回到对应页面。", 5, 0, 6, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER, "书签快捷键", "B 可以直接添加书签。", "Menu 里可以管理书签。", 8, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_BOOKMARK, "书签已保存", "当前位置已经保存为书签。", "以后可以从管理书签跳回来。", 5, 0, 6, 38, 308, 68},
-        {TUTORIAL_SCREEN_READER, "打开功能菜单", "Menu 打开完整功能菜单。", "下面会逐项练习菜单。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 1: 添加书签", "添加当前位置书签。", "也可以直接按 B。", 21, 0, 6, 28, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 2: 管理书签", "这里可以回到书签，", "也可以删掉不用的书签。", 22, 0, 6, 47, 170, 20},
-        {TUTORIAL_SCREEN_BOOKMARK_LIST, "选择书签", "先选一个书签。", "按 Enter 打开操作菜单。", 5, 0, 6, 32, 170, 24},
-        {TUTORIAL_SCREEN_BOOKMARK_ACTION, "跳到书签", "选“跳转”会回到这个位置。", "这和真正阅读时一样。", 21, 0, 6, 32, 130, 24},
-        {TUTORIAL_SCREEN_BOOKMARK_JUMP, "已经跳到书签", "页面回到了书签位置。", "现在再演示删除书签。", 7, 0, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_MENU, "再次打开书签", "回到菜单后再次进入管理书签。", "这次删掉刚才的书签。", 22, 0, 6, 47, 170, 20},
-        {TUTORIAL_SCREEN_BOOKMARK_LIST, "选择要删除的书签", "还是先选中书签。", "按 Enter 打开操作菜单。", 5, 0, 6, 32, 170, 24},
-        {TUTORIAL_SCREEN_BOOKMARK_ACTION, "删除书签", "在操作菜单里选“删除”。", "删除后正文不会受影响。", 22, 0, 6, 54, 130, 24},
-        {TUTORIAL_SCREEN_BOOKMARK_DELETE, "书签已删除", "书签列表已经清空。", "以后也可以这样整理书签。", 5, 0, 6, 52, 220, 48},
-        {TUTORIAL_SCREEN_MENU, "菜单 3: 搜索", "输入想找的字词。", "找到后会跳到对应位置并标出来。", 23, 0, 6, 66, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 4/5: 继续查找", "4 继续找下一个，5 回到上一个。", "会沿用刚才输入的搜索词。", 24, 0, 6, 85, 190, 40},
-        {TUTORIAL_SCREEN_MENU, "菜单 6: 跳转", "按百分比、页码、物理行号或章节目录跳转。", "也可以直接按 G。", 26, 0, 6, 123, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 7: 阅读设置", "调整字号、主题和边距。", "设置变化会重建当前书索引。", 27, 0, 6, 142, 170, 20},
-        {TUTORIAL_SCREEN_MENU, "菜单 8: 文件信息", "这里能看到文件名、路径、编码和页数。", "需要确认文件时很有用。", 28, 0, 6, 161, 170, 20},
-        {TUTORIAL_SCREEN_FILE_INFO, "查看文件信息", "这就是文件信息页。", "看完按 Enter 或 Esc 返回。", 5, 0, 8, 8, 304, 198},
-        {TUTORIAL_SCREEN_MENU, "菜单 9: 返回书库", "9 返回书库。", "返回书库也可以直接按 Esc。", 29, 0, 6, 180, 170, 20},
-        {TUTORIAL_SCREEN_HOME_RECENT, "从最近阅读进入", "打开过的书会出现在最近阅读。", "选中最近阅读后 Enter 继续阅读。", 5, 0, 6, 50, 240, 24},
-        {TUTORIAL_SCREEN_HOME, "打开阅读设置", "主页按 (-) 打开阅读设置。", "也可在阅读菜单中打开。", 13, 0, 6, 114, 180, 24},
-        {TUTORIAL_SCREEN_SETTINGS, "更改字号", "设置里按 1 或 Enter/左右切换字号。", "大字号会重新分页。", 21, 0, 6, 28, 292, 22},
-        {TUTORIAL_SCREEN_SETTINGS_FONT, "更改主题", "字号已经切换。", "按 2 切换浅色、深色和护眼主题。", 22, 0, 6, 50, 292, 22},
-        {TUTORIAL_SCREEN_SETTINGS_THEME, "更改边距", "主题已经切换。", "按 3 切换窄边距和宽边距。", 23, 0, 6, 72, 292, 22},
-        {TUTORIAL_SCREEN_SETTINGS_MARGIN, "章节规则和教学重置", "第4项可添加全局章节规则，*匹配多个字符，?匹配一个。", "第7项可让下次启动重新教学。", 5, 0, 6, 94, 292, 94}
+        {TUTORIAL_SCREEN_HOME, L("打开书库", "Open library", "Ouvrir la bibliothèque"), L("主页按 0 进入 Documents 浏览器。", "Press 0 to browse Documents.", "Accueil : 0 parcourt Documents."), L("也可以从最近阅读续读。", "Recent books resume your reading.", "Reprenez une lecture récente."), 12, 6, 92, 180, 22},
+        {TUTORIAL_SCREEN_BROWSER, L("选择文件", "Choose file", "Choisir un fichier"), L("按下键选中演示文本文件。", "Press Down to select the demo file.", "Bas sélectionne le fichier exemple."), L("浏览器也支持进入文件夹。", "Enter opens folders too.", "Enter ouvre aussi les dossiers."), 2, 6, 30, 220, 44},
+        {TUTORIAL_SCREEN_BROWSER_SELECTED, L("打开文本", "Open text", "Ouvrir le texte"), L("按 Enter 打开选中的文本。", "Enter opens the selected text.", "Enter ouvre le fichier sélectionné."), L("支持 .txt 和 .txt.tns 文件。", "Supports .txt and .txt.tns files.", "Formats : .txt et .txt.tns."), 5, 6, 50, 220, 24},
+        {TUTORIAL_SCREEN_READER, L("翻到下一页", "Next page", "Page suivante"), L("按右键阅读下一页。", "Press Right for the next page.", "Droite affiche la page suivante."), L("阅读进度会自动保存。", "Progress saves automatically.", "La progression est sauvegardée."), 4, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_READER_PAGE2, L("返回上一页", "Previous page", "Page précédente"), L("按左键回到上一页。", "Press Left to go back.", "Gauche revient à la page précédente."), L("设置第8项切换语言。", "Settings item 8 changes language.", "Réglage 8 : changer de langue."), 3, 0, SCREEN_H - 20, SCREEN_W, 20},
+        {TUTORIAL_SCREEN_READER, L("返回书库", "Return home", "Retour à l'accueil"), L("按 Esc 返回书库。", "Press Esc to return home.", "Esc revient à l'accueil."), L("Menu按0选择单本编码。", "Menu then 0 selects book encoding.", "Menu puis 0 : encodage du livre."), 6, 0, SCREEN_H - 20, SCREEN_W, 20}
     };
     int count = (int)(sizeof(steps) / sizeof(steps[0]));
     for (int i = 0; i < count;) {
-        int key, ctrl;
+        int key;
         char footer[96];
         int panel_y;
         const TutorialStep *step = &steps[i];
-        app_log("tutorial", "step %d/%d title=%s expect=%s ctrl=%d",
-                i + 1, count, step->title, tutorial_key_label(step), step->need_ctrl);
+        app_log("tutorial", "step %d/%d title=%s expect=%s",
+                i + 1, count, step->title, tutorial_key_label(step));
         panel_y = step->y > 118 ? 18 : 136;
         gui_gc_begin(gc);
         tutorial_mock_screen(gc, t, step->screen);
@@ -1124,17 +1114,16 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
         draw_text(gc, step->title, 14, panel_y + 6, Bold10, t->fg);
         draw_text(gc, step->body1, 14, panel_y + 24, Regular9, t->fg);
         draw_text(gc, step->body2, 14, panel_y + 42, Regular9, t->fg);
-        snprintf(footer, sizeof(footer), "%d/%d  按%s继续  0跳过",
+        snprintf(footer, sizeof(footer), L("%d/%d  按%s继续  0跳过", "%d/%d  Press %s  0 skip", "%d/%d  %s pour continuer  0 ignorer"),
                  i + 1, count, tutorial_key_label(step));
         draw_text(gc, footer, 14, panel_y + 60, Regular9, t->muted);
         gui_gc_finish(gc);
         gui_gc_blit_to_screen(gc);
 
         key = wait_key();
-        ctrl = last_key_ctrl;
         wait_release();
-        app_log("tutorial", "key step=%d got=%d ctrl=%d expect=%d need_ctrl=%d",
-                i + 1, key, ctrl, step->key, step->need_ctrl);
+        app_log("tutorial", "key step=%d got=%d expect=%d",
+                i + 1, key, step->key);
         if (key == 12 && step->key != 12) {
             uint32_t old_flags = app->tutorial_flags;
             app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
@@ -1146,7 +1135,7 @@ static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
             app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
             return;
         }
-        if (key == step->key && (!step->need_ctrl || ctrl)) {
+        if (key == step->key) {
             i++;
             app_log("tutorial", "advance next=%d/%d", i + 1, count);
         }
@@ -1159,7 +1148,16 @@ static int run_settings_item(Gc gc, AppState *app, const char *data_dir, Reader 
     if (selection == 3) return manage_chapter_rules(gc, app, data_dir, r);
     if (selection == 4) about_page(gc, app);
     else if (selection == 5) usage_page(gc, app);
-    else {
+    else if (selection == 7) {
+        uint32_t old_locale = app->locale;
+        app->locale = (app->locale + (delta < 0 ? 2 : 1)) % 3;
+        if (!storage_save_app(app, data_dir)) {
+            app->locale = old_locale;
+            debug_fail_errno("run_settings_item:locale", data_dir);
+            return -1;
+        }
+        app_locale = app->locale;
+    } else {
         uint32_t old_flags = app->tutorial_flags;
         app->tutorial_flags = 0;
         if (!storage_save_app(app, data_dir)) {
@@ -1174,44 +1172,52 @@ static int run_settings_item(Gc gc, AppState *app, const char *data_dir, Reader 
 
 static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) {
     const Theme *t;
-    const char *font_labels[] = {"小", "中", "大"};
-    const char *theme_labels[] = {"浅色", "深色", "护眼"};
-    const char *margin_labels[] = {"窄", "宽"};
-    char items[7][96];
+    const char *font_labels[3], *theme_labels[3], *margin_labels[2];
+    char items[8][96];
     int sel = 0;
     for (;;) {
         int key;
+        font_labels[0] = L("小", "Small", "Petit");
+        font_labels[1] = L("中", "Medium", "Moyen");
+        font_labels[2] = L("大", "Large", "Grand");
+        theme_labels[0] = L("浅色", "Light", "Clair");
+        theme_labels[1] = L("深色", "Dark", "Sombre");
+        theme_labels[2] = L("护眼", "Sepia", "Sépia");
+        margin_labels[0] = L("窄", "Narrow", "Étroite");
+        margin_labels[1] = L("宽", "Wide", "Large");
         t = &themes[app->theme];
-        snprintf(items[0], sizeof(items[0]), "1. 字号: %s/%s/%s  当前:%s",
+        snprintf(items[0], sizeof(items[0]), L("1. 字号: %s/%s/%s  当前:%s", "1. Font: %s/%s/%s [%s]", "1. Taille : %s/%s/%s [%s]"),
                  font_labels[0], font_labels[1], font_labels[2], font_labels[app->font_choice]);
-        snprintf(items[1], sizeof(items[1]), "2. 主题: %s/%s/%s  当前:%s",
+        snprintf(items[1], sizeof(items[1]), L("2. 主题: %s/%s/%s  当前:%s", "2. Theme: %s/%s/%s [%s]", "2. Thème : %s/%s/%s [%s]"),
                  theme_labels[0], theme_labels[1], theme_labels[2], theme_labels[app->theme]);
-        snprintf(items[2], sizeof(items[2]), "3. 边距: %s/%s  当前:%s",
+        snprintf(items[2], sizeof(items[2]), L("3. 边距: %s/%s  当前:%s", "3. Margin: %s/%s [%s]", "3. Marges : %s/%s [%s]"),
                  margin_labels[0], margin_labels[1], margin_labels[app->margin_choice ? 1 : 0]);
-        snprintf(items[3], sizeof(items[3]), "4. 章节规则: 自定义%lu条",
+        snprintf(items[3], sizeof(items[3]), L("4. 章节规则: 自定义%lu条", "4. Chapter rules: %lu", "4. Règles de chapitre : %lu"),
                  (unsigned long)app->chapter_rules.count);
-        snprintf(items[4], sizeof(items[4]), "5. 关于");
-        snprintf(items[5], sizeof(items[5]), "6. 使用说明");
-        snprintf(items[6], sizeof(items[6]), "7. 重置教学进度");
+        snprintf(items[4], sizeof(items[4]), "%s", L("5. 关于", "5. About", "5. À propos"));
+        snprintf(items[5], sizeof(items[5]), "%s", L("6. 使用说明", "6. Help", "6. Aide"));
+        snprintf(items[6], sizeof(items[6]), "%s", L("7. 重置教学进度", "7. Reset tutorial", "7. Réinit. tutoriel"));
+        snprintf(items[7], sizeof(items[7]), L("8. 语言: %s", "8. Language: %s", "8. Langue : %s"),
+                 app->locale == 2 ? "Français" : app->locale == 1 ? "English" : L("中文", "Chinese", "Chinois"));
         gui_gc_begin(gc);
         set_color(gc, t->bg);
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
-        draw_text(gc, "阅读设置", 8, 6, Bold12, t->fg);
-        for (int i = 0; i < 7; ++i) {
-            int y = 34 + i * 25;
+        draw_text(gc, L("阅读设置", "Reader settings", "Réglages de lecture"), 8, 6, Bold12, t->fg);
+        for (int i = 0; i < 8; ++i) {
+            int y = 29 + i * 23;
             if (i == sel) {
                 set_color(gc, t->highlight_bg);
                 gui_gc_fillRect(gc, 4, y - 2, SCREEN_W - 8, 20);
             }
             draw_text(gc, items[i], 10, y, Regular10, i == sel ? t->highlight_fg : t->fg);
         }
-        draw_text(gc, "1-7直达  左右/Enter执行  Esc返回", 8, FOOTER_Y, Regular9, t->muted);
+        draw_text(gc, L("1-8直达  左右/Enter执行  Esc返回", "1-8 select  Left/Right/Enter  Esc back", "1-8 choisir  G/D/Enter  Esc retour"), 8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         gui_gc_blit_to_screen(gc);
         key = wait_key(); wait_release();
-        if (key == 1) sel = sel > 0 ? sel - 1 : 6;
-        else if (key == 2) sel = sel < 6 ? sel + 1 : 0;
-        else if (key >= 21 && key <= 27) {
+        if (key == 1) sel = sel > 0 ? sel - 1 : 7;
+        else if (key == 2) sel = sel < 7 ? sel + 1 : 0;
+        else if (key >= 21 && key <= 28) {
             sel = key - 21;
             if (run_settings_item(gc, app, data_dir, r, sel, 1) < 0) return -1;
         } else if (key == 3) {
@@ -1230,7 +1236,7 @@ static int settings(Reader *r) {
 
 static void file_info(Reader *r) {
     const Theme *t = &themes[r->app->theme];
-    char path[112];
+    char path[68];
     char name[72];
     char line[128];
     int y;
@@ -1241,26 +1247,26 @@ static void file_info(Reader *r) {
         set_color(r->gc, t->bg);
         gui_gc_fillRect(r->gc, 0, 0, SCREEN_W, SCREEN_H);
 
-        draw_text(r->gc, "文件信息", 10, 8, Bold12, t->fg);
-        snprintf(line, sizeof(line), "名称: %s", name);
+        draw_text(r->gc, L("文件信息", "File info", "Infos sur le fichier"), 10, 8, Bold12, t->fg);
+        snprintf(line, sizeof(line), L("名称: %s", "Name: %s", "Nom : %s"), name);
         draw_text(r->gc, line, 10, 42, Regular10, t->fg);
-        draw_text(r->gc, "路径:", 10, 68, Regular10, t->fg);
-        y = draw_wrapped_text(r->gc, path, 10, 90, SCREEN_W - 20, Regular9, t->fg);
-        if (y < 126) y = 126;
+        draw_text(r->gc, L("路径:", "Path:", "Chemin :"), 10, 64, Regular10, t->fg);
+        y = draw_wrapped_text(r->gc, path, 10, 82, SCREEN_W - 20, Regular9, t->fg);
+        if (y < 112) y = 112;
 
-        snprintf(line, sizeof(line), "大小: %lu 字节", (unsigned long)r->text.size);
+        snprintf(line, sizeof(line), L("大小: %lu 字节", "Size: %lu bytes", "Taille : %lu octets"), (unsigned long)r->text.size);
         draw_text(r->gc, line, 10, y, Regular9, t->fg);
         y += 18;
-        snprintf(line, sizeof(line), "编码: %s", text_encoding_name(r->text.encoding));
+        snprintf(line, sizeof(line), L("编码: %s", "Encoding: %s", "Encodage : %s"), text_encoding_name(r->text.encoding));
         draw_text(r->gc, line, 10, y, Regular9, t->fg);
         y += 18;
-        snprintf(line, sizeof(line), "行数: %lu", (unsigned long)r->index.total_source_lines);
+        snprintf(line, sizeof(line), L("行数: %lu", "Lines: %lu", "Lignes : %lu"), (unsigned long)r->index.total_source_lines);
         draw_text(r->gc, line, 10, y, Regular9, t->fg);
         y += 18;
-        snprintf(line, sizeof(line), "页数: %lu", (unsigned long)r->index.page_count);
+        snprintf(line, sizeof(line), L("页数: %lu", "Pages: %lu", "Pages : %lu"), (unsigned long)r->index.page_count);
         draw_text(r->gc, line, 10, y, Regular9, t->fg);
         y += 18;
-        snprintf(line, sizeof(line), "修改: %lu", (unsigned long)r->text.mtime);
+        snprintf(line, sizeof(line), L("修改: %lu", "Modified: %lu", "Modifié : %lu"), (unsigned long)r->text.mtime);
         draw_text(r->gc, line, 10, y, Regular9, t->fg);
 
         draw_text(r->gc, TXT_ESC_OR_ENTER_BACK, 8, FOOTER_Y, Regular9, t->muted);
@@ -1273,20 +1279,88 @@ static void file_info(Reader *r) {
     }
 }
 
+static int choose_encoding(Reader *r) {
+    const char *names[] = {L("自动检测", "Auto detect", "Détection auto"), "UTF-8", "GB18030",
+                           "UTF-16 LE", "UTF-16 BE"};
+    const char *items[5];
+    char labels[5][40];
+    int pick;
+    TextFile detected;
+    TextEncoding old_encoding = r->text.encoding;
+    uint32_t old_start = r->text.data_start;
+    uint32_t old_override = r->book.encoding_override;
+    int changed;
+    uint32_t i;
+    for (i = 0; i < 5; ++i) {
+        snprintf(labels[i], sizeof(labels[i]), "%s%s",
+                 i == old_override ? "* " : "  ", names[i]);
+        items[i] = labels[i];
+    }
+    pick = choose_list(r->gc, r->app, L("文本编码 (*当前)", "Text encoding (* current)", "Encodage (* actuel)"), items, 5);
+    if (pick < 0 || (uint32_t)pick == old_override) return 0;
+    if (pick == 0) {
+        if (!text_open(&detected, r->text.path)) {
+            debug_fail_errno("choose_encoding:text_open", r->text.path);
+            return 0;
+        }
+        r->text.encoding = detected.encoding;
+        r->text.data_start = detected.data_start;
+        text_close(&detected);
+    } else if (!text_select_encoding(&r->text, (TextEncoding)pick)) {
+        debug_fail_errno("choose_encoding:text_select_encoding", r->text.path);
+        return 0;
+    }
+    r->book.encoding_override = (uint32_t)pick;
+    r->book.encoding = (uint32_t)r->text.encoding;
+    changed = r->text.encoding != old_encoding || r->text.data_start != old_start;
+    if (changed) {
+        index_free(&r->index);
+        if (!ensure_index(r)) {
+            r->text.encoding = old_encoding;
+            r->text.data_start = old_start;
+            r->book.encoding_override = old_override;
+            r->book.encoding = (uint32_t)old_encoding;
+            return -1;
+        }
+        for (i = 0; i < r->book.bookmark_count; ++i) {
+            Bookmark *b = &r->book.bookmarks[i];
+            TextDecoder d;
+            TextPosition pos = index_position_for_offset(&r->index, b->position.byte_offset);
+            uint16_t ch;
+            uint32_t off;
+            text_decoder_at(&r->text, &d, pos);
+            while (d.offset < b->position.byte_offset && text_next(&d, &ch, &off)) {}
+            b->position.byte_offset = d.offset;
+            b->position.source_line = d.line;
+            text_make_excerpt(&r->text, b->position, b->excerpt, EXCERPT_LEN);
+        }
+        r->search_active = 0;
+        r->hit_offset = 0;
+        reader_goto_page(r, 0);
+    }
+    if (!save_reader(r)) return -1;
+    if (changed)
+        app_message(r->gc, r->app, L("文本编码", "Text encoding", "Encodage du texte"),
+                    L("编码已切换，阅读进度从开头开始", "Encoding changed; reading starts at beginning", "Encodage modifié ; reprise au début"));
+    return 1;
+}
+
 static int reader_menu(Reader *r) {
-    const char *items[] = {
-        "1. 添加书签",
-        "2. 管理书签",
-        "3. 搜索",
-        "4. 向后查找",
-        "5. 向前查找",
-        "6. 跳转",
-        "7. 阅读设置",
-        "8. 文件信息",
-        "9. 返回书库"
-    };
     for (;;) {
-        int pick = choose_list(r->gc, r->app, "功能菜单", items, 9);
+        const char *items[] = {
+            L("1. 添加书签", "1. Add bookmark", "1. Ajouter un signet"),
+            L("2. 管理书签", "2. Bookmarks", "2. Signets"),
+            L("3. 搜索", "3. Search", "3. Rechercher"),
+            L("4. 向后查找", "4. Find next", "4. Résultat suivant"),
+            L("5. 向前查找", "5. Find previous", "5. Résultat précédent"),
+            L("6. 跳转", "6. Go to", "6. Aller à"),
+            L("7. 阅读设置", "7. Reader settings", "7. Réglages de lecture"),
+            L("8. 文件信息", "8. File info", "8. Infos sur le fichier"),
+            L("9. 返回书库", "9. Return home", "9. Retour à l'accueil"),
+            L("0. 文本编码", "0. Text encoding", "0. Encodage du texte")
+        };
+        int pick = choose_list_rows(r->gc, r->app, L("功能菜单", "Reader menu", "Menu de lecture"),
+                                    items, NULL, 0, 10, 9);
         if (pick < 0) return 0;
         if (pick == 8) return -1;
         if (pick == 0) add_bookmark(r);
@@ -1301,13 +1375,16 @@ static int reader_menu(Reader *r) {
             if (settings(r) < 0) return -1;
         } else if (pick == 7) {
             file_info(r);
+        } else if (pick == 9) {
+            if (choose_encoding(r) < 0) return -1;
+            return 0;
         }
     }
 }
 
 static int open_reader(const char *path, Gc gc, AppState *app, const char *data_dir) {
     Reader r;
-    int key, menu_res;
+    int key, menu_res, page_drawn = 0;
     app_log("reader", "open begin %s", path ? path : "(null)");
     memset(&r, 0, sizeof(r));
     r.gc = gc;
@@ -1334,8 +1411,26 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
             (unsigned long)r.index.page_count, (unsigned long)r.top.byte_offset);
     for (;;) {
         TextPosition before;
-        draw_page(&r);
+        if (!page_drawn) draw_page(&r);
+        page_drawn = 0;
         key = wait_key();
+        if (!last_key_ctrl &&
+            ((key == 4 && r.page + 1 < r.index.page_count) || (key == 3 && r.page > 0))) {
+            uint32_t page = key == 4 ? r.page + 1 : r.page - 1;
+            uint32_t start = r.index.pages[page].byte_offset;
+            uint32_t end = page + 1 < r.index.page_count ?
+                           r.index.pages[page + 1].byte_offset : r.text.size;
+            if (!r.search_active || start >= r.hit_end || end <= r.hit_offset) {
+                r.search_active = 0;
+                r.hit_offset = 0;
+            }
+            reader_goto_page(&r, page);
+            draw_page(&r);
+            page_drawn = 1;
+            wait_release();
+            if (!save_reader(&r)) page_drawn = 0;
+            continue;
+        }
         wait_release();
         before = r.top;
         if (r.search_active) {
@@ -1354,7 +1449,9 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
             r.hit_offset = 0;
         }
         r.hit_offset = 0;
-        if (key == 4 && r.page + 1 < r.index.page_count) reader_goto_page(&r, r.page + 1);
+        if (last_key_ctrl && (key == 3 || key == 4))
+            reader_chapter_step(&r, key == 4 ? 1 : -1);
+        else if (key == 4 && r.page + 1 < r.index.page_count) reader_goto_page(&r, r.page + 1);
         else if (key == 3 && r.page > 0) reader_goto_page(&r, r.page - 1);
         else if (key == 1 && last_key_ctrl) reader_goto_page(&r, 0);
         else if (key == 2 && last_key_ctrl) reader_goto_page(&r, r.index.page_count - 1);
@@ -1392,8 +1489,8 @@ static void draw_home(Gc gc, AppState *app, int sel, int top) {
     gui_gc_begin(gc);
     set_color(gc, t->bg);
     gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
-    draw_text(gc, "nTexts 中文阅读器", 8, 6, Bold12, t->fg);
-    draw_text(gc, recent_count ? "最近阅读" : "暂无最近阅读", 8, 30, Bold10,
+    draw_text(gc, L("nTexts阅读器", "nTexts Text Reader", "nTexts Lecteur de textes"), 8, 6, Bold12, t->fg);
+    draw_text(gc, recent_count ? L("最近阅读", "Recent books", "Lectures récentes") : L("暂无最近阅读", "No recent books", "Aucune lecture récente"), 8, 30, Bold10,
               recent_count ? t->fg : t->muted);
     for (int i = 0; i < HOME_VISIBLE_ROWS && top + i < total; ++i) {
         int row = top + i;
@@ -1427,8 +1524,9 @@ static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
     const char *documents = get_documents_dir();
     const Theme *t = &themes[app->theme];
     char cwd[512];
+    uint16_t filter[QUERY_LEN] = {0};
     FileItem *items = NULL;
-    int count = 0, sel = 0, top = 0, visible = 9;
+    int count = 0, file_count = 0, sel = 0, top = 0, visible = 8;
     int reload = 1;
     if (!documents || !*documents || !out || !outcap) {
         errno = EINVAL;
@@ -1440,32 +1538,63 @@ static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
         if (reload) {
             free(items);
             items = NULL;
-            if (!load_dir(cwd, &items, &count)) return 0;
-            reload = 0;
+            if (!load_dir(cwd, filter, &items, &count)) return 0;
+            file_count = 0;
+            for (int i = 0; i < count; ++i) if (!items[i].is_dir) ++file_count;
             if (sel >= count) sel = count ? count - 1 : 0;
             if (top > sel) top = sel;
+            reload = 0;
         }
         gui_gc_begin(gc);
         set_color(gc, t->bg);
         gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
-        draw_text(gc, base_name(cwd), 8, 6, Bold10, t->fg);
+        draw_text(gc, strcmp(cwd, documents) ? base_name(cwd) : "Documents",
+                  8, 6, Bold10, t->fg);
+        if (filter[0]) {
+            char label[48];
+            uint16_t preview[18];
+            snprintf(label, sizeof(label), "%s (%d):", L("筛选", "Filter", "Filtre"), file_count);
+            draw_text(gc, label, 8, 23, Regular9, t->muted);
+            copy_u16(preview, (int)(sizeof(preview) / sizeof(preview[0])), filter);
+            draw_u16(gc, preview, 100, 23, Regular9, t->fg);
+        }
         for (int i = 0; i < visible && top + i < count; ++i) {
             char label[150];
-            int y = 30 + i * 21;
+            int y = (filter[0] ? 42 : 30) + i * 21;
             if (top + i == sel) {
                 set_color(gc, t->highlight_bg);
                 gui_gc_fillRect(gc, 4, y - 2, SCREEN_W - 8, 20);
             }
             snprintf(label, sizeof(label), "%s%s",
-                     items[top + i].is_dir ? "[目录] " : "", items[top + i].name);
+                     items[top + i].is_dir ? L("[目录] ", "[Folder] ", "[Dossier] ") : "", items[top + i].name);
             draw_text(gc, label, 10, y, Regular10,
                       top + i == sel ? t->highlight_fg : t->fg);
         }
-        draw_text(gc, TXT_FOOTER_BROWSER, 8, FOOTER_Y, Regular9, t->muted);
+        draw_text(gc, filter[0] ?
+                  L("F筛选  0清除  Esc上级/返回", "F filter  0 clear  Esc up/back",
+                    "F filtrer  0 effacer  Esc retour") : TXT_FOOTER_BROWSER,
+                  8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         gui_gc_blit_to_screen(gc);
         key = wait_key();
         wait_release();
+        if (key == 9) {
+            uint16_t input[QUERY_LEN];
+            if (request_u16_input(L("文件名筛选", "Filter filename", "Filtrer le nom"),
+                                  L("输入部分文件名", "Part of filename", "Partie du nom"),
+                                  filter, input, QUERY_LEN)) {
+                copy_u16(filter, QUERY_LEN, input);
+                sel = top = 0;
+                reload = 1;
+            }
+            continue;
+        }
+        if (key == 12 && filter[0]) {
+            filter[0] = 0;
+            sel = top = 0;
+            reload = 1;
+            continue;
+        }
         if (key == 1) {
             sel = count ? (sel > 0 ? sel - 1 : count - 1) : 0;
             if (sel < top) top = sel;
@@ -1537,6 +1666,7 @@ int ntexts_app_main(int argc, char **argv) {
     }
     app_log("startup", "storage dir=%s", data_dir);
     storage_load_app(&app, data_dir);
+    app_locale = app.locale;
     if (storage_prune_recents(&app)) {
         app_log("startup", "pruned invalid recents");
         if (!storage_save_app(&app, data_dir))

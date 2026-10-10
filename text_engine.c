@@ -166,6 +166,32 @@ int text_open(TextFile *text, const char *path) {
     return 1;
 }
 
+int text_select_encoding(TextFile *text, TextEncoding encoding) {
+    unsigned char bom[3] = {0};
+    uint32_t data_start = 0;
+
+    if (!text || !text->fp ||
+        (encoding != TEXT_UTF8 && encoding != TEXT_GB18030 &&
+         encoding != TEXT_UTF16_LE && encoding != TEXT_UTF16_BE)) {
+        errno = EINVAL;
+        return 0;
+    }
+    if (fseek(text->fp, 0, SEEK_SET) != 0) return 0;
+    (void)fread(bom, 1, sizeof(bom), text->fp);
+    if (encoding == TEXT_UTF8 &&
+        bom[0] == 0xef && bom[1] == 0xbb && bom[2] == 0xbf) {
+        data_start = 3;
+    } else if (encoding == TEXT_UTF16_LE && bom[0] == 0xff && bom[1] == 0xfe) {
+        data_start = 2;
+    } else if (encoding == TEXT_UTF16_BE && bom[0] == 0xfe && bom[1] == 0xff) {
+        data_start = 2;
+    }
+    if (fseek(text->fp, data_start, SEEK_SET) != 0) return 0;
+    text->encoding = encoding;
+    text->data_start = data_start;
+    return 1;
+}
+
 void text_close(TextFile *text) {
     if (text->fp) fclose(text->fp);
     text->fp = NULL;
@@ -364,13 +390,18 @@ const char *text_encoding_name(TextEncoding encoding) {
     }
 }
 
-uint16_t text_fold_ascii(uint16_t value) {
-    return value >= 'A' && value <= 'Z' ? (uint16_t)(value + ('a' - 'A')) : value;
+uint16_t text_fold_latin(uint16_t value) {
+    if ((value >= 'A' && value <= 'Z') ||
+        (value >= 0x00c0 && value <= 0x00d6) ||
+        (value >= 0x00d8 && value <= 0x00de))
+        return (uint16_t)(value + 0x20);
+    if (value == 0x0152) return 0x0153;
+    if (value == 0x0178) return 0x00ff;
+    return value;
 }
 
 static int search_char_equal(uint16_t left, uint16_t right) {
-    if (left < 128 && right < 128) return text_fold_ascii(left) == text_fold_ascii(right);
-    return left == right;
+    return text_fold_latin(left) == text_fold_latin(right);
 }
 
 static uint32_t search_query_length(const uint16_t *query) {
@@ -414,39 +445,52 @@ int text_find_forward(TextFile *text, const uint16_t *query, uint32_t from, uint
 }
 
 int text_find_backward(TextFile *text, const uint16_t *query, uint32_t before,
-                       uint32_t *hit_offset) {
+                       const TextPosition *pages, uint32_t page_count, uint32_t *hit_offset) {
     TextDecoder decoder;
     uint16_t ring[TEXT_SEARCH_QUERY_MAX];
     uint32_t offsets[TEXT_SEARCH_QUERY_MAX];
     uint16_t value;
     uint32_t offset;
     uint32_t query_length = search_query_length(query);
-    uint32_t seen = 0;
-    int found = 0;
-    if (!text || !text->fp || !query_length || !hit_offset) {
+    uint32_t lo = 0, hi = page_count;
+    if (!text || !text->fp || !query_length || !pages || !page_count || !hit_offset) {
         errno = EINVAL;
         return 0;
     }
-    text_decoder_at(text, &decoder, (TextPosition){text->data_start, 1});
-    while (text_next(&decoder, &value, &offset)) {
-        uint32_t i;
-        uint32_t start;
-        ring[seen % query_length] = value;
-        offsets[seen % query_length] = offset;
-        ++seen;
-        if (seen < query_length) continue;
-        start = offsets[(seen - query_length) % query_length];
-        if (start >= before) break;
-        for (i = 0; i < query_length; ++i) {
-            uint32_t index = (seen - query_length + i) % query_length;
-            if (!search_char_equal(ring[index], query[i])) break;
-        }
-        if (i == query_length) {
-            *hit_offset = start;
-            found = 1;
-        }
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (pages[mid].byte_offset < before) lo = mid + 1;
+        else hi = mid;
     }
-    return found;
+    while (lo) {
+        uint32_t limit;
+        uint32_t seen = 0;
+        int found = 0;
+        --lo;
+        limit = lo + 1 < page_count ? pages[lo + 1].byte_offset : text->size;
+        if (limit > before) limit = before;
+        text_decoder_at(text, &decoder, pages[lo]);
+        while (text_next(&decoder, &value, &offset)) {
+            uint32_t i;
+            uint32_t start;
+            ring[seen % query_length] = value;
+            offsets[seen % query_length] = offset;
+            ++seen;
+            if (seen < query_length) continue;
+            start = offsets[(seen - query_length) % query_length];
+            if (start >= limit) break;
+            for (i = 0; i < query_length; ++i) {
+                uint32_t index = (seen - query_length + i) % query_length;
+                if (!search_char_equal(ring[index], query[i])) break;
+            }
+            if (i == query_length) {
+                *hit_offset = start;
+                found = 1;
+            }
+        }
+        if (found) return 1;
+    }
+    return 0;
 }
 
 void text_make_excerpt(TextFile *text, TextPosition position, uint16_t *out, size_t capacity) {

@@ -7,20 +7,21 @@
 #include <string.h>
 
 #define INDEX_MAGIC 0x5849544eu
-#define INDEX_VERSION 7u
+#define INDEX_VERSION 8u
 #define LEGACY_INDEX_VERSION_MIN 4u
-#define LEGACY_INDEX_VERSION_MAX 6u
+#define LEGACY_INDEX_VERSION_MAX 7u
 
 typedef struct {
     uint32_t magic, version, file_size, file_mtime, encoding;
     int32_t font_size, margin, lines_per_page, line_height;
     uint32_t page_count, line_count, total_source_lines;
     uint32_t chapter_rules_hash, chapter_count, chapters_truncated;
+    uint32_t last_visible_end;
     char file_path[512];
 } IndexHeader;
 
 #define SIZE_ASSERT(name, condition) typedef char size_assert_##name[(condition) ? 1 : -1]
-SIZE_ASSERT(index_header, sizeof(IndexHeader) == 572);
+SIZE_ASSERT(index_header, sizeof(IndexHeader) == 576);
 SIZE_ASSERT(chapter, sizeof(Chapter) == 104);
 
 static int layout_valid(Layout layout) {
@@ -116,6 +117,9 @@ int index_build(PageIndex *index, TextFile *text, Gc gc, Layout layout,
     TextPosition line_start;
     uint16_t line[CHAPTER_SCAN_LEN];
     uint16_t ch;
+    int ascii_width[128] = {0};
+    uint16_t wide_chars[256] = {0};
+    int wide_width[256];
     uint32_t line_length = 0;
     uint32_t off, visual_line = 0, last_report = 0;
     int line_overlong = 0;
@@ -135,6 +139,7 @@ int index_build(PageIndex *index, TextFile *text, Gc gc, Layout layout,
     index_free(index);
     index->layout = layout;
     index->file_size = text->size;
+    index->last_visible_end = text->data_start;
     index->file_mtime = text->mtime;
     index->encoding = text->encoding;
     memcpy(index->file_path, text->path, strlen(text->path) + 1);
@@ -166,8 +171,24 @@ int index_build(PageIndex *index, TextFile *text, Gc gc, Layout layout,
             else line_overlong = 1;
             if (ch == '\t') ch = ' ';
             if (ch < 32) continue;
-            cw = gui_gc_getCharWidth(gc, (gui_gc_Font)layout.font_size, (short)ch);
-            if (cw <= 0) cw = layout.font_size;
+            if (ch != ' ' && ch != 0x3000) index->last_visible_end = d.offset;
+            if (ch < 128) {
+                cw = ascii_width[ch];
+            } else {
+                unsigned slot = ch & 255u;
+                cw = wide_chars[slot] == ch ? wide_width[slot] : 0;
+            }
+            if (!cw) {
+                cw = gui_gc_getCharWidth(gc, (gui_gc_Font)layout.font_size, (short)ch);
+                if (cw <= 0) cw = layout.font_size;
+                if (ch < 128) {
+                    ascii_width[ch] = cw;
+                } else {
+                    unsigned slot = ch & 255u;
+                    wide_chars[slot] = ch;
+                    wide_width[slot] = cw;
+                }
+            }
             if (width && width + cw > max_width) {
                 visual_line++;
                 width = 0;
@@ -184,6 +205,9 @@ int index_build(PageIndex *index, TextFile *text, Gc gc, Layout layout,
         }
     }
     if (!collect_chapter(index, rules, line_start, line, line_length, line_overlong)) return 0;
+    while (index->page_count > 1 &&
+           index->pages[index->page_count - 1].byte_offset >= index->last_visible_end)
+        --index->page_count;
     index->total_source_lines = d.line;
     if (progress && !progress(text->size, text->size, context)) return -1;
     app_log("index", "build ok pages=%lu lines=%lu chapters=%lu source_lines=%lu",
@@ -233,6 +257,7 @@ int index_save(const PageIndex *index, const char *path) {
     h.chapter_rules_hash = index->chapter_rules_hash;
     h.chapter_count = index->chapter_count;
     h.chapters_truncated = index->chapters_truncated;
+    h.last_visible_end = index->last_visible_end;
     memcpy(h.file_path, index->file_path, sizeof(h.file_path));
     crc = crc32_update(crc, &h, sizeof(h));
     crc = crc32_update(crc, index->pages, index->page_count * sizeof(*index->pages));
@@ -345,7 +370,8 @@ int index_load(PageIndex *index, TextFile *text, Layout layout,
         return 0;
     }
     if (!h.page_count || h.page_count > 1000000 || !h.line_count || h.line_count > 1000000 ||
-        h.chapter_count > MAX_CHAPTERS || h.chapters_truncated > 1 || !h.total_source_lines) {
+        h.chapter_count > MAX_CHAPTERS || h.chapters_truncated > 1 || !h.total_source_lines ||
+        h.last_visible_end < first.byte_offset || h.last_visible_end > h.file_size) {
         fclose(fp);
         app_log("index", "cache fields");
         return 0;
@@ -383,7 +409,8 @@ int index_load(PageIndex *index, TextFile *text, Layout layout,
     }
     if (!positions_valid(candidate.pages, h.page_count, first, h.file_size, h.total_source_lines) ||
         !positions_valid(candidate.lines, h.line_count, first, h.file_size, h.total_source_lines) ||
-        !chapters_valid(candidate.chapters, h.chapter_count, first, h.file_size, h.total_source_lines)) {
+        !chapters_valid(candidate.chapters, h.chapter_count, first, h.file_size, h.total_source_lines) ||
+        (h.page_count > 1 && candidate.pages[h.page_count - 1].byte_offset >= h.last_visible_end)) {
         index_free(&candidate);
         app_log("index", "cache fields");
         return 0;
@@ -394,6 +421,7 @@ int index_load(PageIndex *index, TextFile *text, Layout layout,
     candidate.chapters_truncated = h.chapters_truncated;
     candidate.chapter_rules_hash = h.chapter_rules_hash;
     candidate.total_source_lines = h.total_source_lines;
+    candidate.last_visible_end = h.last_visible_end;
     candidate.file_size = h.file_size;
     candidate.file_mtime = h.file_mtime;
     candidate.encoding = (TextEncoding)h.encoding;
@@ -433,6 +461,25 @@ TextPosition index_position_for_percent(const PageIndex *index, uint32_t percent
 
 TextPosition index_position_for_offset(const PageIndex *index, uint32_t offset) {
     return index_position_for_page(index, index_page_for_offset(index, offset));
+}
+
+int index_chapter_for_offset(const PageIndex *index, uint32_t offset, int direction,
+                             TextPosition *position) {
+    uint32_t lo = 0, hi = index->chapter_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (index->chapters[mid].position.byte_offset <= offset) lo = mid + 1;
+        else hi = mid;
+    }
+    if (direction > 0 && lo < index->chapter_count) {
+        *position = index->chapters[lo].position;
+        return 1;
+    }
+    if (direction < 0 && lo > 1) {
+        *position = index->chapters[lo - 2].position;
+        return 1;
+    }
+    return 0;
 }
 
 TextPosition index_position_for_line(const PageIndex *index, uint32_t line) {

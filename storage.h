@@ -25,6 +25,7 @@ typedef struct {
     TextPosition progress;
     uint32_t bookmark_count;
     Bookmark bookmarks[MAX_BOOKMARKS];
+    uint32_t encoding_override;
 } BookState;
 
 typedef struct {
@@ -41,6 +42,7 @@ typedef struct {
     uint32_t history_count;
     uint16_t history[MAX_HISTORY][QUERY_LEN];
     ChapterRules chapter_rules;
+    uint32_t locale;
 } AppState;
 
 uint32_t storage_hash_path(const char *path);

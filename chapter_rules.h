@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define CHAPTER_RULES_VERSION 1u
+#define CHAPTER_RULES_VERSION 2u
 #define MAX_CHAPTER_PATTERNS 8
 #define CHAPTER_PATTERN_LEN 48
 

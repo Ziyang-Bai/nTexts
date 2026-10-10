@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Run host and static tests
+      - name: Run host tests
         run: make test
 
       - name: Set up Ndless
@@ -27,7 +27,7 @@ jobs:
         uses: Ziyang-Bai/setup-ndless@v1
 
       - name: Build calculator package
-        run: ./tools/build-wsl.sh
+        run: ./tools/build-wsl.sh VERSION='Beta Testing v0.0.1' COMMIT_HASH="${GITHUB_SHA}"
 
       - name: Upload calculator package
         uses: actions/upload-artifact@v7

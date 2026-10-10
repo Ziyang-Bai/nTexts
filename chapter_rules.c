@@ -10,7 +10,7 @@ static int is_space(uint16_t value) {
 }
 
 static int equal_unit(uint16_t left, uint16_t right) {
-    return text_fold_ascii(left) == text_fold_ascii(right);
+    return text_fold_latin(left) == text_fold_latin(right);
 }
 
 static size_t u16_length(const uint16_t *text) {
@@ -106,7 +106,7 @@ static int match_builtin_chinese(const uint16_t *line, const uint16_t *end) {
 static int match_ascii_word(const uint16_t **cursor, const uint16_t *end, const char *word) {
     const uint16_t *p = *cursor;
     while (*word) {
-        if (p == end || text_fold_ascii(*p) != (uint16_t)*word) return 0;
+        if (p == end || text_fold_latin(*p) != (uint16_t)*word) return 0;
         ++p;
         ++word;
     }
@@ -115,15 +115,16 @@ static int match_ascii_word(const uint16_t **cursor, const uint16_t *end, const 
 }
 
 static int is_roman(uint16_t value) {
-    value = text_fold_ascii(value);
+    value = text_fold_latin(value);
     return value == 'i' || value == 'v' || value == 'x' || value == 'l' ||
            value == 'c' || value == 'd' || value == 'm';
 }
 
-static int match_builtin_english(const uint16_t *line, const uint16_t *end) {
+static int match_builtin_numbered(const uint16_t *line, const uint16_t *end,
+                                  const char *word) {
     const uint16_t *p = line;
     int decimal;
-    if (!match_ascii_word(&p, end, "chapter") || p == end || !is_space(*p)) return 0;
+    if (!match_ascii_word(&p, end, word) || p == end || !is_space(*p)) return 0;
     while (p < end && is_space(*p)) ++p;
     if (p == end) return 0;
     decimal = *p >= '0' && *p <= '9';
@@ -190,7 +191,9 @@ int chapter_rules_match(const ChapterRules *rules, const uint16_t *line) {
     end = start + u16_length(start);
     while (end > start && is_space(end[-1])) --end;
     if (start == end) return 0;
-    if (match_builtin_chinese(start, end) || match_builtin_english(start, end)) return 1;
+    if (match_builtin_chinese(start, end) ||
+        match_builtin_numbered(start, end, "chapter") ||
+        match_builtin_numbered(start, end, "chapitre")) return 1;
     if (!rules) return 0;
     for (i = 0; i < rules->count && i < MAX_CHAPTER_PATTERNS; ++i) {
         if (match_pattern(rules->patterns[i], start, end)) return 1;

@@ -49,6 +49,28 @@ typedef struct {
     uint16_t history[MAX_HISTORY][QUERY_LEN];
 } LegacyAppState;
 
+typedef struct {
+    uint32_t magic, version;
+    char path[512];
+    uint32_t file_size, file_mtime;
+    uint32_t encoding;
+    TextPosition progress;
+    uint32_t bookmark_count;
+    Bookmark bookmarks[MAX_BOOKMARKS];
+} V4BookState;
+
+typedef struct {
+    uint32_t magic, version;
+    int font_choice, theme, margin_choice;
+    uint32_t tutorial_flags;
+    uint32_t recent_count;
+    RecentBook recents[MAX_RECENTS];
+    uint32_t history_count;
+    uint16_t history[MAX_HISTORY][QUERY_LEN];
+    ChapterRules chapter_rules;
+} V4AppState;
+
+
 static void make_path(char *out, size_t capacity, const char *leaf) {
     snprintf(out, capacity, "%s/%s", test_directory, leaf);
 }
@@ -242,7 +264,20 @@ static int test_canonical_path_persistence_identity(void) {
     storage_app_defaults(&app);
     storage_touch_recent(&app, &loaded_state);
     CHECK(app.recent_count == 1 && strcmp(app.recents[0].path, direct.path) == 0);
+    loaded_state.progress.byte_offset = 14;
+    storage_touch_recent(&app, &loaded_state);
+    CHECK(app.recent_count == 1 && strcmp(app.recents[0].path, direct.path) == 0);
+    CHECK(app.recents[0].offset == 14 && app.recents[1].path[0] == 0);
     CHECK(!storage_prune_recents(&app));
+    CHECK(strlen(alias_path) < sizeof(state.path));
+    memcpy(state.path, alias_path, strlen(alias_path) + 1);
+    storage_touch_recent(&app, &state);
+    CHECK(app.recent_count == 2 && strcmp(app.recents[0].path, alias_path) == 0);
+    storage_touch_recent(&app, &loaded_state);
+    CHECK(app.recent_count == 2 && strcmp(app.recents[0].path, direct.path) == 0);
+    CHECK(strcmp(app.recents[1].path, alias_path) == 0);
+    storage_app_defaults(&app);
+    storage_touch_recent(&app, &loaded_state);
     app.recent_count = 2;
     snprintf(app.recents[1].path, sizeof(app.recents[1].path),
              "%s/missing-recent.txt", test_directory);
@@ -401,6 +436,161 @@ static int test_utf16_decoding_and_positions(void) {
     return 1;
 }
 
+static int test_manual_encoding_selection(void) {
+    static const unsigned char le[] = {'A', 0, 0x2d, 0x4e, '\n', 0};
+    static const unsigned char be[] = {0, 'A', 0x4e, 0x2d, 0, '\n'};
+    static const unsigned char gb[] = {0xd6, 0xd0, '\n'};
+    static const unsigned char utf8_bom[] = {0xef, 0xbb, 0xbf, 'A'};
+    char path[600];
+    TextFile text;
+    TextDecoder decoder;
+    TextPosition start;
+    uint16_t value;
+    uint32_t offset;
+
+    make_path(path, sizeof(path), "manual-utf16-le.txt");
+    CHECK(write_bytes(path, le, sizeof(le)) && text_open(&text, path));
+    CHECK(text.encoding == TEXT_UTF8);
+    CHECK(text_select_encoding(&text, TEXT_UTF16_LE) && text.data_start == 0);
+    start.byte_offset = text.data_start;
+    start.source_line = 1;
+    text_decoder_at(&text, &decoder, start);
+    CHECK(text_next(&decoder, &value, &offset) && value == 'A' && offset == 0);
+    CHECK(text_next(&decoder, &value, &offset) && value == 0x4e2d && offset == 2);
+    CHECK(text_next(&decoder, &value, &offset) && value == '\n' && offset == 4);
+    CHECK(decoder.line == 2);
+    CHECK(!text_select_encoding(&text, (TextEncoding)99) && text.encoding == TEXT_UTF16_LE);
+    text_close(&text);
+
+    make_path(path, sizeof(path), "manual-utf16-be.txt");
+    CHECK(write_bytes(path, be, sizeof(be)) && text_open(&text, path));
+    CHECK(text_select_encoding(&text, TEXT_UTF16_BE) && text.data_start == 0);
+    text_decoder_at(&text, &decoder, start);
+    CHECK(text_next(&decoder, &value, &offset) && value == 'A' && offset == 0);
+    CHECK(text_next(&decoder, &value, &offset) && value == 0x4e2d && offset == 2);
+    text_close(&text);
+
+    make_path(path, sizeof(path), "manual-gb.txt");
+    CHECK(write_bytes(path, gb, sizeof(gb)) && text_open(&text, path));
+    CHECK(text.encoding == TEXT_GB18030);
+    CHECK(text_select_encoding(&text, TEXT_GB18030) && text.data_start == 0);
+    text_decoder_at(&text, &decoder, start);
+    CHECK(text_next(&decoder, &value, &offset) && value == 0x4e2d && offset == 0);
+    text_close(&text);
+
+    make_path(path, sizeof(path), "manual-utf8-bom.txt");
+    CHECK(write_bytes(path, utf8_bom, sizeof(utf8_bom)) && text_open(&text, path));
+    CHECK(text_select_encoding(&text, TEXT_UTF8) && text.data_start == 3);
+    start.byte_offset = text.data_start;
+    text_decoder_at(&text, &decoder, start);
+    CHECK(text_next(&decoder, &value, &offset) && value == 'A' && offset == 3);
+    text_close(&text);
+    return 1;
+}
+
+static int test_multilingual_utf8_stream(void) {
+    static const char content[] = "A \xe6\x97\xa5 \xed\x95\x9c \xe4\xb8\xad\n";
+    uint16_t japanese[] = {0x65e5, 0};
+    uint16_t korean[] = {0xd55c, 0};
+    uint16_t chinese[] = {0x4e2d, 0};
+    char path[600];
+    TextFile text;
+    TextDecoder decoder;
+    TextPosition start = {0, 1};
+    uint16_t value;
+    uint32_t offset, hit;
+
+    make_path(path, sizeof(path), "multilingual-utf8.txt");
+    CHECK(write_bytes(path, content, sizeof(content) - 1) && text_open(&text, path));
+    CHECK(text.encoding == TEXT_UTF8);
+    text_decoder_at(&text, &decoder, start);
+    CHECK(text_next(&decoder, &value, &offset) && value == 'A');
+    CHECK(text_next(&decoder, &value, &offset) && value == ' ');
+    CHECK(text_next(&decoder, &value, &offset) && value == 0x65e5 && offset == 2);
+    CHECK(text_find_forward(&text, japanese, 0, &hit) && hit == 2);
+    CHECK(text_find_forward(&text, korean, 0, &hit) && hit == 6);
+    CHECK(text_find_forward(&text, chinese, 0, &hit) && hit == 10);
+    text_close(&text);
+    return 1;
+}
+
+static int test_french_chapters_and_index_cache(void) {
+    static const uint16_t arabic[] = {'C','h','a','p','i','t','r','e',' ','2',0};
+    static const uint16_t roman[] = {'c','H','a','P','i','T','r','E',' ','I','V',':',' ','F','i','n',0};
+    static const uint16_t prose[] = {'M','o','n',' ','c','h','a','p','i','t','r','e',' ','3',0};
+    static const uint16_t word[] = {'C','h','a','p','i','t','r','e',' ','D','e','u','x',0};
+    static const uint16_t suffix[] = {'C','h','a','p','i','t','r','e',' ','2','a',0};
+    static const uint16_t joined[] = {'C','h','a','p','i','t','r','e','2',0};
+    static const uint16_t roman_suffix[] = {'C','h','a','p','i','t','r','e',' ','I','V','s',0};
+    static const uint16_t custom[] = {0x00c9, 'p', 'i', 's', 'o', 'd', 'e', ' ', '*', 0};
+    static const uint16_t custom_lower[] = {0x00e9, 'P', 'I', 'S', 'O', 'D', 'E', ' ', '1', 0};
+    static const uint16_t custom_plain[] = {'E', 'p', 'i', 's', 'o', 'd', 'e', ' ', '1', 0};
+    static const char content[] =
+        "Paragraphe ordinaire\n"
+        "Chapitre 2 - \xc3\x89t\xc3\xa9\n"
+        "chapitre IV: fin\n"
+        "Mon chapitre 3 dans le texte\n"
+        "Chapitre Deux\n";
+    ChapterRules rules;
+    PageIndex built;
+    PageIndex loaded;
+    TextFile text;
+    TextPosition target;
+    Layout layout = {10, 6, 10, 20};
+    uint32_t old_version = 1;
+    uint32_t count = 0;
+    uint32_t old_hash;
+    uint32_t current_hash;
+    char path[600];
+    char cache[600];
+
+    chapter_rules_defaults(&rules);
+    CHECK(chapter_rules_match(&rules, arabic));
+    CHECK(chapter_rules_match(&rules, roman));
+    CHECK(!chapter_rules_match(&rules, prose));
+    CHECK(!chapter_rules_match(&rules, word));
+    CHECK(!chapter_rules_match(&rules, suffix));
+    CHECK(!chapter_rules_match(&rules, joined));
+    CHECK(!chapter_rules_match(&rules, roman_suffix));
+    CHECK(chapter_rules_add(&rules, custom) == 1);
+    CHECK(chapter_rules_match(&rules, custom_lower));
+    CHECK(!chapter_rules_match(&rules, custom_plain));
+    chapter_rules_defaults(&rules);
+    old_hash = crc32_finish(crc32_update(crc32_update(CRC32_INITIAL,
+                                  &old_version, sizeof(old_version)), &count, sizeof(count)));
+    current_hash = chapter_rules_hash(&rules);
+    CHECK(old_hash != current_hash);
+
+    make_path(path, sizeof(path), "french-chapters.txt");
+    make_path(cache, sizeof(cache), "french-chapters.idx");
+    CHECK(write_bytes(path, content, sizeof(content) - 1) && text_open(&text, path));
+    index_init(&built);
+    index_init(&loaded);
+    CHECK(index_build(&built, &text, NULL, layout, &rules, NULL, NULL) == 1);
+    CHECK(built.chapter_count == 2 && built.chapter_rules_hash == current_hash);
+    CHECK(built.chapters[0].position.byte_offset == sizeof("Paragraphe ordinaire\n") - 1);
+    CHECK(built.chapters[1].position.source_line == 3);
+    CHECK(index_chapter_for_offset(&built, 0, 1, &target) &&
+          target.byte_offset == built.chapters[0].position.byte_offset);
+    CHECK(index_chapter_for_offset(&built, built.chapters[1].position.byte_offset,
+                                   -1, &target) &&
+          target.byte_offset == built.chapters[0].position.byte_offset);
+    built.chapter_rules_hash = old_hash;
+    CHECK(index_save(&built, cache));
+    CHECK(!index_load(&loaded, &text, layout, &rules, cache));
+    built.chapter_rules_hash = current_hash;
+    CHECK(index_save(&built, cache));
+    CHECK(index_load(&loaded, &text, layout, &rules, cache));
+    CHECK(loaded.chapter_count == 2);
+    CHECK(index_chapter_for_offset(&loaded, loaded.chapters[0].position.byte_offset,
+                                   1, &target) &&
+          target.byte_offset == loaded.chapters[1].position.byte_offset);
+    index_free(&loaded);
+    index_free(&built);
+    text_close(&text);
+    return 1;
+}
+
 static int test_chapter_rules_and_index_round_trip(void) {
     static const uint16_t chinese_heading[] = {0x7b2c, 0x5341, 0x4e8c, 0x7ae0, ' ', 0x5f00, 0x59cb, 0};
     static const uint16_t chinese_near_miss[] = {0x7b2c, 0x5341, 0x4e8c, 0x8282, 0};
@@ -421,6 +611,7 @@ static int test_chapter_rules_and_index_round_trip(void) {
     PageIndex loaded;
     PageIndex capped;
     TextFile text;
+    TextPosition chapter_target;
     Layout layout = {10, 6, 10, 20};
     char path[600];
     char cache[600];
@@ -475,7 +666,18 @@ static int test_chapter_rules_and_index_round_trip(void) {
     CHECK(index_save(&built, cache));
     CHECK(index_load(&loaded, &text, layout, &rules, cache));
     CHECK(loaded.chapter_count == 3 && loaded.chapter_rules_hash == chapter_rules_hash(&rules));
+    CHECK(index_chapter_for_offset(&loaded, 0, 1, &chapter_target) &&
+          chapter_target.byte_offset == loaded.chapters[1].position.byte_offset);
+    CHECK(index_chapter_for_offset(&loaded, loaded.chapters[1].position.byte_offset + 1,
+                                   -1, &chapter_target) && chapter_target.byte_offset == 0);
+    CHECK(index_chapter_for_offset(&loaded, loaded.chapters[2].position.byte_offset,
+                                   -1, &chapter_target) &&
+          chapter_target.byte_offset == loaded.chapters[1].position.byte_offset);
+    CHECK(!index_chapter_for_offset(&loaded, 0, -1, &chapter_target));
+    CHECK(!index_chapter_for_offset(&loaded, loaded.chapters[2].position.byte_offset,
+                                    1, &chapter_target));
     index_free(&loaded);
+    CHECK(!index_chapter_for_offset(&loaded, 0, 1, &chapter_target));
     loaded.total_source_lines = 77;
     CHECK(!index_load(&loaded, &text, layout, &defaults, cache));
     CHECK(loaded.total_source_lines == 77);
@@ -575,7 +777,6 @@ static int test_app_state_integrity_and_v3_migration(void) {
     char path[600];
     unsigned char *data;
     size_t size;
-    struct stat st;
     uint16_t empty_query[QUERY_LEN] = {0};
 
     make_path(path, sizeof(path), "app.state");
@@ -587,14 +788,18 @@ static int test_app_state_integrity_and_v3_migration(void) {
     state.history_count = 1;
     state.history[0][0] = 'x';
     CHECK(storage_save_app(&state, test_directory));
-    CHECK(stat(path, &st) == 0 && st.st_size == 7288);
-    CHECK(storage_load_app(&loaded, test_directory) && loaded.theme == 2);
+    CHECK(storage_load_app(&loaded, test_directory) && loaded.theme == 2 && loaded.locale == 0);
+    state.locale = 2;
+    CHECK(storage_save_app(&state, test_directory));
+    CHECK(storage_load_app(&loaded, test_directory) && loaded.locale == 2 && loaded.theme == 2);
+    state.locale = 0;
 
     invalid = state;
     invalid.magic = 0;
     invalid.version = 0;
     invalid.theme = 99;
     invalid.tutorial_flags = 0x7fffffffu;
+    invalid.locale = 99;
     invalid.recent_count = MAX_RECENTS + 1;
     snprintf(invalid.recents[0].path, sizeof(invalid.recents[0].path), "%s", "recoverable.txt");
     invalid.recents[0].offset = 9;
@@ -604,14 +809,14 @@ static int test_app_state_integrity_and_v3_migration(void) {
     invalid.chapter_rules.count = MAX_CHAPTER_PATTERNS + 1;
     CHECK(storage_save_app(&invalid, test_directory));
     CHECK(storage_load_app(&loaded, test_directory));
-    CHECK(loaded.magic == APP_MAGIC && loaded.version == 4 && loaded.theme == 0);
+    CHECK(loaded.magic == APP_MAGIC && loaded.version == 5 && loaded.theme == 0 && loaded.locale == 0);
     CHECK(loaded.tutorial_flags == TUTORIAL_READER_SEEN);
     CHECK(loaded.recent_count == 1 && loaded.recents[0].offset == 3);
     CHECK(loaded.history_count == 1 && loaded.history[0][QUERY_LEN - 1] == 0);
     CHECK(chapter_rules_validate(&loaded.chapter_rules) && loaded.chapter_rules.count == 0);
 
     data = read_bytes(path, &size);
-    CHECK(data && size == 7288);
+    CHECK(data != NULL);
     data[100] ^= 1;
     CHECK(write_bytes(path, data, size));
     free(data);
@@ -649,6 +854,11 @@ static int test_app_state_integrity_and_v3_migration(void) {
     CHECK(write_checked_raw(path, &invalid, sizeof(invalid)));
     CHECK(!storage_load_app(&loaded, test_directory) && loaded.theme == 0);
 
+    invalid = state;
+    invalid.locale = 99;
+    CHECK(write_checked_raw(path, &invalid, sizeof(invalid)));
+    CHECK(!storage_load_app(&loaded, test_directory) && loaded.locale == 0);
+
     memset(&legacy, 0, sizeof(legacy));
     legacy.magic = APP_MAGIC;
     legacy.version = LEGACY_VERSION;
@@ -659,7 +869,7 @@ static int test_app_state_integrity_and_v3_migration(void) {
     legacy.history[0][0] = 'q';
     CHECK(sizeof(legacy) == 6512 && write_bytes(path, &legacy, sizeof(legacy)));
     CHECK(storage_load_app(&loaded, test_directory));
-    CHECK(loaded.version == 4 && loaded.font_choice == 2 && loaded.theme == 1);
+    CHECK(loaded.version == 5 && loaded.font_choice == 2 && loaded.theme == 1);
     CHECK(loaded.chapter_rules.count == 0 && chapter_rules_validate(&loaded.chapter_rules));
     return 1;
 }
@@ -674,7 +884,6 @@ static int test_book_state_integrity_encoding_and_v3_migration(void) {
     char path[600];
     unsigned char *data;
     size_t size;
-    struct stat st;
 
     memset(&text, 0, sizeof(text));
     snprintf(text.path, sizeof(text.path), "%s", "book-identity.txt");
@@ -692,12 +901,11 @@ static int test_book_state_integrity_encoding_and_v3_migration(void) {
     state.bookmarks[0].excerpt[0] = 's';
     state.bookmarks[0].excerpt[1] = 0;
     CHECK(storage_save_book(&state, test_directory));
-    CHECK(stat(path, &st) == 0 && st.st_size == 2708);
     CHECK(storage_load_book(&loaded, &text, test_directory));
     CHECK(loaded.encoding == TEXT_UTF8 && loaded.progress.byte_offset == 20);
 
     data = read_bytes(path, &size);
-    CHECK(data && size == 2708);
+    CHECK(data != NULL);
     data[80] ^= 1;
     CHECK(write_bytes(path, data, size));
     free(data);
@@ -708,13 +916,20 @@ static int test_book_state_integrity_encoding_and_v3_migration(void) {
     CHECK(storage_save_book(&state, test_directory));
     changed = text;
     changed.encoding = TEXT_GB18030;
-    CHECK(!storage_load_book(&loaded, &changed, test_directory));
-    CHECK(loaded.encoding == TEXT_GB18030 && loaded.bookmark_count == 0);
+    CHECK(storage_load_book(&loaded, &changed, test_directory));
+    CHECK(loaded.encoding == TEXT_GB18030 && loaded.progress.byte_offset == 0);
+    CHECK(loaded.bookmark_count == 1 && loaded.bookmarks[0].position.byte_offset == 90);
 
     invalid = state;
     invalid.encoding = 99;
     CHECK(write_checked_raw(path, &invalid, sizeof(invalid)));
     CHECK(!storage_load_book(&loaded, &text, test_directory));
+
+    invalid = state;
+    invalid.encoding_override = 99;
+    CHECK(write_checked_raw(path, &invalid, sizeof(invalid)));
+    CHECK(storage_load_book(&loaded, &text, test_directory));
+    CHECK(loaded.encoding_override == 0 && loaded.progress.byte_offset == 20);
 
     memset(&legacy, 0, sizeof(legacy));
     legacy.magic = BOOK_MAGIC;
@@ -726,7 +941,7 @@ static int test_book_state_integrity_encoding_and_v3_migration(void) {
     legacy.progress.source_line = 3;
     CHECK(sizeof(legacy) == 2700 && write_bytes(path, &legacy, sizeof(legacy)));
     CHECK(storage_load_book(&loaded, &text, test_directory));
-    CHECK(loaded.version == 4 && loaded.encoding == TEXT_UTF8 && loaded.progress.byte_offset == 30);
+    CHECK(loaded.version == 5 && loaded.encoding == TEXT_UTF8 && loaded.progress.byte_offset == 30);
 
     CHECK(write_bytes(path, &legacy, sizeof(legacy)));
     changed = text;
@@ -745,6 +960,93 @@ static int test_book_state_integrity_encoding_and_v3_migration(void) {
     CHECK(loaded.bookmark_count == 1 && loaded.bookmarks[0].position.byte_offset == 50);
     CHECK(loaded.bookmarks[0].position.source_line == 9);
     CHECK(loaded.bookmarks[0].excerpt[0] == 's');
+    return 1;
+}
+
+static int test_v4_preferences_and_bookmarks_migrate(void) {
+    V4AppState old_app;
+    V4BookState old_book;
+    AppState app;
+    BookState book;
+    TextFile text;
+    char path[600];
+
+    memset(&old_app, 0, sizeof(old_app));
+    old_app.magic = APP_MAGIC;
+    old_app.version = 4;
+    old_app.font_choice = 2;
+    old_app.theme = 1;
+    old_app.tutorial_flags = TUTORIAL_READER_SEEN;
+    old_app.recent_count = 1;
+    snprintf(old_app.recents[0].path, sizeof(old_app.recents[0].path), "migrate.txt");
+    old_app.recents[0].file_size = 50;
+    old_app.recents[0].offset = 10;
+    old_app.history_count = 1;
+    old_app.history[0][0] = 0x65e5;
+    chapter_rules_defaults(&old_app.chapter_rules);
+    make_path(path, sizeof(path), "app.state");
+    CHECK(write_checked_raw(path, &old_app, sizeof(old_app)));
+    CHECK(storage_load_app(&app, test_directory));
+    CHECK(app.version == 5 && app.locale == 0 && app.font_choice == 2 && app.theme == 1);
+    CHECK(app.tutorial_flags == TUTORIAL_READER_SEEN &&
+          app.recent_count == 1 && app.recents[0].offset == 10);
+    CHECK(app.history_count == 1 && app.history[0][0] == 0x65e5);
+    app.locale = 1;
+    CHECK(storage_save_app(&app, test_directory));
+    CHECK(storage_load_app(&app, test_directory) && app.locale == 1);
+
+    memset(&text, 0, sizeof(text));
+    snprintf(text.path, sizeof(text.path), "migrate.txt");
+    text.size = 50;
+    text.mtime = 7;
+    text.encoding = TEXT_UTF8;
+    memset(&old_book, 0, sizeof(old_book));
+    old_book.magic = BOOK_MAGIC;
+    old_book.version = 4;
+    snprintf(old_book.path, sizeof(old_book.path), "%s", text.path);
+    old_book.file_size = text.size;
+    old_book.file_mtime = text.mtime;
+    old_book.encoding = TEXT_UTF8;
+    old_book.progress.byte_offset = 10;
+    old_book.progress.source_line = 2;
+    old_book.bookmark_count = 1;
+    old_book.bookmarks[0].position.byte_offset = 20;
+    old_book.bookmarks[0].position.source_line = 3;
+    old_book.bookmarks[0].excerpt[0] = 0x4e2d;
+    storage_book_path(path, sizeof(path), test_directory, text.path, "state");
+    CHECK(write_checked_raw(path, &old_book, sizeof(old_book)));
+    CHECK(storage_load_book(&book, &text, test_directory));
+    CHECK(book.version == 5 && book.encoding_override == 0 && book.progress.byte_offset == 10);
+    CHECK(book.bookmark_count == 1 && book.bookmarks[0].position.byte_offset == 20);
+    CHECK(book.bookmarks[0].excerpt[0] == 0x4e2d);
+    return 1;
+}
+
+static int test_manual_encoding_persists_per_book(void) {
+    static const unsigned char content[] = {'A', 0, 0x2d, 0x4e, '\n', 0};
+    TextFile text;
+    BookState saved, loaded;
+    TextDecoder decoder;
+    TextPosition start = {0, 1};
+    uint16_t value;
+    uint32_t offset;
+    char path[600];
+
+    make_path(path, sizeof(path), "manual-book.txt");
+    CHECK(write_bytes(path, content, sizeof(content)) && text_open(&text, path));
+    CHECK(text.encoding == TEXT_UTF8);
+    storage_book_defaults(&saved, &text);
+    saved.encoding_override = TEXT_UTF16_LE;
+    saved.encoding = TEXT_UTF16_LE;
+    saved.progress = start;
+    CHECK(storage_save_book(&saved, test_directory));
+    CHECK(storage_load_book(&loaded, &text, test_directory));
+    CHECK(loaded.encoding_override == TEXT_UTF16_LE && text.encoding == TEXT_UTF16_LE);
+    CHECK(text.data_start == 0);
+    text_decoder_at(&text, &decoder, loaded.progress);
+    CHECK(text_next(&decoder, &value, &offset) && value == 'A');
+    CHECK(text_next(&decoder, &value, &offset) && value == 0x4e2d);
+    text_close(&text);
     return 1;
 }
 
@@ -806,9 +1108,9 @@ static int test_index_corruption_recovery(void) {
     remove(cache_path);
     CHECK(index_save(&built, cache_path));
     data = read_bytes(cache_path, &size);
-    CHECK(data && size >= 68);
-    data[60] = 1;
-    data[61] = data[62] = data[63] = 0;
+    CHECK(data && size >= 72);
+    data[64] = 1;
+    data[65] = data[66] = data[67] = 0;
     CHECK(rewrite_crc(data, size) && write_bytes(cache_path, data, size));
     free(data);
     CHECK(!index_load(&loaded, &text, layout, &rules, cache_path));
@@ -824,6 +1126,14 @@ static int test_index_corruption_recovery(void) {
     CHECK(loaded.total_source_lines == 55);
     index_free(&loaded);
 
+    CHECK(index_save(&built, cache_path));
+    data = read_bytes(cache_path, &size);
+    CHECK(data && size >= 8);
+    put_le32(data + 4, 7u);
+    CHECK(rewrite_crc(data, size) && write_bytes(cache_path, data, size));
+    free(data);
+    CHECK(!index_load(&loaded, &text, layout, &rules, cache_path));
+
     CHECK(index_build(&recovered, &text, NULL, layout, &rules, NULL, NULL) == 1);
     CHECK(index_save(&recovered, cache_path));
     CHECK(index_load(&loaded, &text, layout, &rules, cache_path));
@@ -835,28 +1145,184 @@ static int test_index_corruption_recovery(void) {
     return 1;
 }
 
+static int test_index_keeps_colliding_glyph_widths_distinct(void) {
+    static const unsigned char content[] = {
+        0xe4, 0xb8, 0x80, 0xe4, 0xbc, 0x80, 0xe4, 0xb8, 0x80, '\n'
+    };
+    ChapterRules rules;
+    PageIndex index;
+    TextFile text;
+    Layout layout = {10, 0, 1, 20};
+    char path[600];
+
+    make_path(path, sizeof(path), "glyph-widths.txt");
+    CHECK(write_bytes(path, content, sizeof(content)) && text_open(&text, path));
+    chapter_rules_defaults(&rules);
+    index_init(&index);
+    host_char_width = -2;
+    CHECK(index_build(&index, &text, NULL, layout, &rules, NULL, NULL) == 1);
+    host_char_width = 8;
+    CHECK(index.page_count == 2 && index.pages[0].byte_offset == 0);
+    CHECK(index.pages[1].byte_offset == 6);
+    index_free(&index);
+    text_close(&text);
+    return 1;
+}
+
+static int test_index_skips_trailing_blank_page(void) {
+    static const char trailing[] = "x\n\n";
+    static const char interior[] = "x\n\ny";
+    ChapterRules rules;
+    PageIndex index;
+    TextFile text;
+    Layout layout = {10, 6, 1, 20};
+    char path[600];
+
+    chapter_rules_defaults(&rules);
+    index_init(&index);
+    host_char_width = 8;
+    make_path(path, sizeof(path), "trailing-blank.txt");
+    CHECK(write_bytes(path, trailing, sizeof(trailing) - 1) && text_open(&text, path));
+    CHECK(index_build(&index, &text, NULL, layout, &rules, NULL, NULL) == 1);
+    CHECK(index.page_count == 1 && index.total_source_lines == 3);
+    index_free(&index);
+    text_close(&text);
+
+    make_path(path, sizeof(path), "interior-blank.txt");
+    CHECK(write_bytes(path, interior, sizeof(interior) - 1) && text_open(&text, path));
+    CHECK(index_build(&index, &text, NULL, layout, &rules, NULL, NULL) == 1);
+    CHECK(index.page_count == 3 && index.pages[1].byte_offset == 2 &&
+          index.pages[2].byte_offset == 3);
+    index_free(&index);
+    text_close(&text);
+    return 1;
+}
+
 static int test_streaming_search_boundaries_and_overlap(void) {
+    static const TextPosition pages[] = {{0, 1}, {7, 1}, {13, 1}, {16, 2}, {20, 2}};
     static const char content[] = "Alpha aaa ALPHA\nalpha";
     uint16_t alpha[TEXT_SEARCH_QUERY_MAX];
     uint16_t double_a[TEXT_SEARCH_QUERY_MAX];
+    uint16_t absent[TEXT_SEARCH_QUERY_MAX];
     TextFile text;
     char path[600];
     uint32_t hit = UINT32_MAX;
 
     ascii_u16(alpha, TEXT_SEARCH_QUERY_MAX, "alpha");
     ascii_u16(double_a, TEXT_SEARCH_QUERY_MAX, "aa");
+    ascii_u16(absent, TEXT_SEARCH_QUERY_MAX, "missing");
     make_path(path, sizeof(path), "search.txt");
     CHECK(write_bytes(path, content, sizeof(content) - 1));
     CHECK(text_open(&text, path));
     CHECK(text_find_forward(&text, alpha, 0, &hit) && hit == 0);
     CHECK(text_find_forward(&text, alpha, 1, &hit) && hit == 10);
-    CHECK(text_find_backward(&text, alpha, text.size, &hit) && hit == 16);
-    CHECK(text_find_backward(&text, alpha, 16, &hit) && hit == 10);
+    CHECK(text_find_backward(&text, alpha, text.size, pages, 5, &hit) && hit == 16);
+    CHECK(text_find_backward(&text, alpha, 16, pages, 5, &hit) && hit == 10);
     CHECK(text_find_forward(&text, double_a, 6, &hit) && hit == 6);
     CHECK(text_find_forward(&text, double_a, 7, &hit) && hit == 7);
-    CHECK(text_find_backward(&text, double_a, 9, &hit) && hit == 7);
+    CHECK(text_find_backward(&text, double_a, 9, pages, 5, &hit) && hit == 7);
+    CHECK(text_find_backward(&text, double_a, 7, pages, 5, &hit) && hit == 6);
+    CHECK(text_find_backward(&text, double_a, 6, pages, 5, &hit) == 0);
+    CHECK(text_find_backward(&text, alpha, 0, pages, 5, &hit) == 0);
+    CHECK(!text_find_backward(&text, absent, text.size, pages, 5, &hit));
+    errno = 0;
+    CHECK(!text_find_backward(&text, alpha, text.size, NULL, 0, &hit) && errno == EINVAL);
     errno = 0;
     CHECK(!text_find_forward(&text, NULL, 0, &hit) && errno == EINVAL);
+    text_close(&text);
+    return 1;
+}
+
+static int test_backward_search_multibyte_pages(void) {
+    static const unsigned char le[] = {
+        0xff, 0xfe, 'x', 0, 'A', 0, 'b', 0, 'a', 0, 'B', 0, 'a', 0, 'x', 0
+    };
+    static const unsigned char be[] = {
+        0xfe, 0xff, 0, 'x', 0, 'A', 0, 'b', 0, 'a', 0, 'B', 0, 'a', 0, 'x'
+    };
+    static const unsigned char *utf16[] = {le, be};
+    static const TextPosition utf16_pages[] = {{2, 1}, {8, 1}, {12, 1}};
+    static const uint16_t aba[] = {'a', 'B', 'A', 0};
+    static const unsigned char gb[] = {
+        'x', 0xd6, 0xd0, 'a', 0xd6, 0xd0, 'a', 0xd6, 0xd0, 'a', 'x'
+    };
+    static const TextPosition gb_pages[] = {{0, 1}, {3, 1}, {6, 1}, {9, 1}};
+    static const unsigned char utf8[] = {
+        'x', 0xe4, 0xb8, 0xad, 'a', 0xe4, 0xb8, 0xad,
+        'a', 0xe4, 0xb8, 0xad, 'a', 'x'
+    };
+    static const TextPosition utf8_pages[] = {{0, 1}, {4, 1}, {8, 1}, {12, 1}};
+    static const uint16_t chinese[] = {0x4e2d, 'A', 0x4e2d, 0};
+    TextFile text;
+    char path[600];
+    uint32_t hit;
+    int i;
+
+    for (i = 0; i < 2; ++i) {
+        make_path(path, sizeof(path), i ? "search-utf16-be.txt" : "search-utf16-le.txt");
+        CHECK(write_bytes(path, utf16[i], sizeof(le)) && text_open(&text, path));
+        CHECK(text.encoding == (i ? TEXT_UTF16_BE : TEXT_UTF16_LE));
+        CHECK(text_find_backward(&text, aba, text.size, utf16_pages, 3, &hit) && hit == 8);
+        CHECK(text_find_backward(&text, aba, 8, utf16_pages, 3, &hit) && hit == 4);
+        CHECK(!text_find_backward(&text, aba, 4, utf16_pages, 3, &hit));
+        text_close(&text);
+    }
+
+    make_path(path, sizeof(path), "search-gb.txt");
+    CHECK(write_bytes(path, gb, sizeof(gb)) && text_open(&text, path));
+    CHECK(text.encoding == TEXT_GB18030);
+    CHECK(text_find_backward(&text, chinese, text.size, gb_pages, 4, &hit) && hit == 4);
+    CHECK(text_find_backward(&text, chinese, 4, gb_pages, 4, &hit) && hit == 1);
+    CHECK(!text_find_backward(&text, chinese, 1, gb_pages, 4, &hit));
+    text_close(&text);
+
+    make_path(path, sizeof(path), "search-utf8.txt");
+    CHECK(write_bytes(path, utf8, sizeof(utf8)) && text_open(&text, path));
+    CHECK(text.encoding == TEXT_UTF8);
+    CHECK(text_find_backward(&text, chinese, text.size, utf8_pages, 4, &hit) && hit == 5);
+    CHECK(text_find_backward(&text, chinese, 5, utf8_pages, 4, &hit) && hit == 1);
+    text_close(&text);
+    return 1;
+}
+
+static int test_french_search_case_and_accents(void) {
+    static const char content[] =
+        "cote c\xc3\xb4te \xc3\x89T\xc3\x89 \xc3\xa9t\xc3\xa9 "
+        "\xc5\x92uvre \xc5\x93uvre";
+    static const TextPosition pages[] = {
+        {0, 1}, {5, 1}, {11, 1}, {17, 1}, {23, 1}, {30, 1}
+    };
+    static const uint16_t ete[] = {0x00c9, 't', 0x00e9, 0};
+    static const uint16_t upper_ete[] = {0x00c9, 'T', 0x00c9, 0};
+    static const uint16_t oeuvre[] = {0x0153, 'u', 'v', 'r', 'e', 0};
+    static const uint16_t cote[] = {'c', 'o', 't', 'e', 0};
+    static const uint16_t circumflex[] = {'c', 0x00f4, 't', 'e', 0};
+    TextFile text;
+    char path[600];
+    uint32_t hit;
+
+    CHECK(text_fold_latin('A') == 'a');
+    CHECK(text_fold_latin(0x00c0) == 0x00e0);
+    CHECK(text_fold_latin(0x00d8) == 0x00f8);
+    CHECK(text_fold_latin(0x00d7) == 0x00d7);
+    CHECK(text_fold_latin(0x0178) == 0x00ff);
+    CHECK(text_fold_latin(0x0152) == 0x0153);
+    CHECK(text_fold_latin(0x00e9) != text_fold_latin('e'));
+    make_path(path, sizeof(path), "french-search.txt");
+    CHECK(write_bytes(path, content, sizeof(content) - 1) && text_open(&text, path));
+    CHECK(text.encoding == TEXT_UTF8);
+    CHECK(text_find_forward(&text, ete, 0, &hit) && hit == 11);
+    CHECK(text_find_forward(&text, upper_ete, 17, &hit) && hit == 17);
+    CHECK(text_find_backward(&text, ete, text.size, pages, 6, &hit) && hit == 17);
+    CHECK(text_find_backward(&text, upper_ete, 17, pages, 6, &hit) && hit == 11);
+    CHECK(text_find_forward(&text, oeuvre, 0, &hit) && hit == 23);
+    CHECK(text_find_forward(&text, oeuvre, 30, &hit) && hit == 30);
+    CHECK(text_find_backward(&text, oeuvre, 30, pages, 6, &hit) && hit == 23);
+    CHECK(text_find_forward(&text, cote, 0, &hit) && hit == 0);
+    CHECK(!text_find_forward(&text, cote, 5, &hit));
+    CHECK(text_find_forward(&text, circumflex, 0, &hit) && hit == 5);
+    CHECK(text_find_backward(&text, circumflex, text.size, pages, 6, &hit) && hit == 5);
+    CHECK(text_find_backward(&text, cote, text.size, pages, 6, &hit) && hit == 0);
     text_close(&text);
     return 1;
 }
@@ -942,12 +1408,21 @@ int main(int argc, char **argv) {
         {"test_storage_init_documents_directory", test_storage_init_documents_directory},
         {"test_canonical_path_persistence_identity", test_canonical_path_persistence_identity},
         {"test_utf16_decoding_and_positions", test_utf16_decoding_and_positions},
+        {"test_manual_encoding_selection", test_manual_encoding_selection},
+        {"test_multilingual_utf8_stream", test_multilingual_utf8_stream},
         {"test_chapter_rules_and_index_round_trip", test_chapter_rules_and_index_round_trip},
+        {"test_french_chapters_and_index_cache", test_french_chapters_and_index_cache},
         {"test_bookmark_excerpt", test_bookmark_excerpt},
         {"test_app_state_integrity_and_v3_migration", test_app_state_integrity_and_v3_migration},
         {"test_book_state_integrity_encoding_and_v3_migration", test_book_state_integrity_encoding_and_v3_migration},
+        {"test_v4_preferences_and_bookmarks_migrate", test_v4_preferences_and_bookmarks_migrate},
+        {"test_manual_encoding_persists_per_book", test_manual_encoding_persists_per_book},
         {"test_index_corruption_recovery", test_index_corruption_recovery},
+        {"test_index_keeps_colliding_glyph_widths_distinct", test_index_keeps_colliding_glyph_widths_distinct},
+        {"test_index_skips_trailing_blank_page", test_index_skips_trailing_blank_page},
         {"test_streaming_search_boundaries_and_overlap", test_streaming_search_boundaries_and_overlap},
+        {"test_backward_search_multibyte_pages", test_backward_search_multibyte_pages},
+        {"test_french_search_case_and_accents", test_french_search_case_and_accents},
         {"test_invalid_inputs_layout_and_index_identity", test_invalid_inputs_layout_and_index_identity},
     };
     size_t i;

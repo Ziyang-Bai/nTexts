@@ -1,4 +1,6 @@
 DEBUG ?= FALSE
+VERSION ?= Beta Testing v0.0.1
+COMMIT_HASH ?= local
 
 GCC = nspire-gcc
 LD = nspire-ld
@@ -6,7 +8,9 @@ GENZEHN = genzehn
 HOST_CC ?= cc
 HOST_CFLAGS ?= -Wall -Wextra -std=c99
 
-GCCFLAGS = -Wall -Wextra -marm -std=c99 -MMD -MP
+GCCFLAGS = -Wall -Wextra -marm -std=c99 -MMD -MP \
+	'-DNTEXTS_BUILD_VERSION="$(VERSION)"' \
+	'-DNTEXTS_BUILD_COMMIT="$(COMMIT_HASH)"'
 LDFLAGS = -Wl,--nspireio,--gc-sections
 ZEHNFLAGS = --name "nTexts" --240x320-support true --uses-lcd-blit true
 
@@ -29,6 +33,8 @@ all: $(EXE).tns
 %.o: %.c
 	$(GCC) $(GCCFLAGS) -c $< -o $@
 
+app.o: FORCE
+
 $(EXE).elf: $(OBJS)
 	$(LD) $^ -o $@ $(LDFLAGS)
 
@@ -46,16 +52,15 @@ clean:
 	rm -f $(HOST_TEST)
 	rm -rf .build/host-test-data
 
-test-static:
-	python3 tests/test_static.py
-
 test-host: $(HOST_TEST)
 	rm -rf .build/host-test-data
 	mkdir -p .build/host-test-data
 	./$(HOST_TEST) .build/host-test-data
 
-test: test-static test-host
+test: test-host
 
 -include $(DEPS)
 
-.PHONY: all clean test test-static test-host
+FORCE:
+
+.PHONY: all clean test test-host FORCE

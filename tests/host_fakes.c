@@ -23,7 +23,8 @@ void app_log(const char *tag, const char *fmt, ...) {
 int gui_gc_getCharWidth(Gc gc, gui_gc_Font font, short value) {
     (void)gc;
     (void)font;
-    (void)value;
+    if (host_char_width == -2)
+        return value == 0x4e00 ? 200 : value == 0x4f00 ? 80 : 8;
     return host_char_width;
 }
 

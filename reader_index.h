@@ -34,6 +34,7 @@ typedef struct {
     uint32_t chapters_truncated;
     uint32_t chapter_rules_hash;
     uint32_t total_source_lines;
+    uint32_t last_visible_end;
     uint32_t file_size;
     uint32_t file_mtime;
     TextEncoding encoding;
@@ -54,6 +55,8 @@ uint32_t index_page_for_offset(const PageIndex *index, uint32_t offset);
 TextPosition index_position_for_page(const PageIndex *index, uint32_t page);
 TextPosition index_position_for_percent(const PageIndex *index, uint32_t percent);
 TextPosition index_position_for_offset(const PageIndex *index, uint32_t offset);
+int index_chapter_for_offset(const PageIndex *index, uint32_t offset, int direction,
+                             TextPosition *position);
 TextPosition index_position_for_line(const PageIndex *index, uint32_t line);
 
 #endif
