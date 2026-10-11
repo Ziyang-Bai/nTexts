@@ -90,17 +90,6 @@ static void set_color(Gc gc, int color) {
     gui_gc_setColorRGB(gc, (color >> 16) & 255, (color >> 8) & 255, color & 255);
 }
 
-static void fill_dim_outside(Gc gc, int x, int y, int w, int h) {
-    gui_gc_setAlpha(gc, GC_A_HALF);
-    set_color(gc, 0x000000);
-    if (y > 0) gui_gc_fillRect(gc, 0, 0, SCREEN_W, y);
-    if (x > 0) gui_gc_fillRect(gc, 0, y, x, h);
-    if (x + w < SCREEN_W) gui_gc_fillRect(gc, x + w, y, SCREEN_W - x - w, h);
-    if (y + h < SCREEN_H) gui_gc_fillRect(gc, 0, y + h, SCREEN_W, SCREEN_H - y - h);
-    gui_gc_setAlpha(gc, GC_A_OFF);
-    set_color(gc, 0xffcc33);
-    gui_gc_drawRect(gc, x, y, w, h);
-}
 
 static void app_message(Gc gc, const AppState *app, const char *title, const char *msg) {
     const Theme *t = &themes[app->theme];
@@ -324,6 +313,7 @@ static int wait_key(void) {
         if (isKeyPressed(KEY_NSPIRE_HOME)) return 11;
         if (isKeyPressed(KEY_NSPIRE_0)) return 12;
         if (isKeyPressed(KEY_NSPIRE_NEGATIVE) || isKeyPressed(KEY_NSPIRE_MINUS)) return 13;
+        if (isKeyPressed(KEY_NSPIRE_H)) return 14;
         if (isKeyPressed(KEY_NSPIRE_1)) return 21;
         if (isKeyPressed(KEY_NSPIRE_2)) return 22;
         if (isKeyPressed(KEY_NSPIRE_3)) return 23;
@@ -513,7 +503,7 @@ static void draw_page(Reader *r) {
     if (r->search_active) {
         snprintf(status, sizeof(status), "%s", TXT_SEARCH_MODE_HINT);
     } else {
-        snprintf(status, sizeof(status), L("%lu/%lu页  %lu%%  %s", "%lu/%lu pages  %lu%%  %s", "%lu/%lu pages  %lu%%  %s"),
+        snprintf(status, sizeof(status), L("%lu/%lu页 %lu%% %s H:提示", "%lu/%lu %lu%% %s H:tips", "%lu/%lu %lu%% %s H:aide"),
                  (unsigned long)(r->page + 1), (unsigned long)r->index.page_count,
                  (unsigned long)percent_for_reader(r), text_encoding_name(r->text.encoding));
     }
@@ -944,7 +934,14 @@ static void usage_page(Gc gc, AppState *app) {
          "设置第8项切换中文/English/Français",
          "阅读 Menu 按0手动选择单本编码",
          "编码: 自动/UTF-8/GB18030/UTF-16LE/BE",
-         "章节规则: *多字符，?单字符"}
+         "章节规则: *多字符，?单字符"},
+        {"快捷键提示", "H 随时重开主页、书库或阅读提示",
+         "阅读搜索中按H显示搜索快捷键",
+         "Enter/Esc 仅关闭当前情境的提示",
+         "每种情境每次启动只自动提示一次",
+         "提示中按0永久关闭全部自动提示",
+         "设置第7项开关自动提示，开启后重置",
+         "自动提示关闭后，H仍然可用"}
     };
     static const char *en_pages[][8] = {
         {"Home and reading", "0 browse Documents; Enter resumes a book",
@@ -966,7 +963,14 @@ static void usage_page(Gc gc, AppState *app) {
          "Settings item 8: Chinese/English/Français",
          "Reader Menu: 0 picks this book's encoding",
          "Auto, UTF-8, GB18030, UTF-16 LE/BE",
-         "Chapter rules: * many, ? one character"}
+         "Chapter rules: * many, ? one character"},
+        {"Shortcut hints", "H: reopen home, library or reader hints",
+         "H during search: search-specific shortcuts",
+         "Enter/Esc: close hints for this context",
+         "Auto hints: once per context, per launch",
+         "0 in hints: stop ALL auto hints permanently",
+         "Settings 7: toggle; enabling resets hints",
+         "H still works when auto hints are off"}
     };
     static const char *fr_pages[][8] = {
         {"Accueil et lecture", "0 parcourt Documents ; Enter reprend un livre",
@@ -988,7 +992,14 @@ static void usage_page(Gc gc, AppState *app) {
          "Réglage 8 : 中文/English/Français",
          "Menu lecture, 0 : encodage du livre",
          "Auto, UTF-8, GB18030, UTF-16 LE/BE",
-         "Règles : * plusieurs, ? un caractère"}
+         "Règles : * plusieurs, ? un caractère"},
+        {"Aide aux raccourcis", "H : aide accueil, bibliothèque ou lecture",
+         "H en recherche : raccourcis de recherche",
+         "Enter/Esc : fermer l'aide de ce contexte",
+         "Auto : une fois par contexte et lancement",
+         "0 dans l'aide : arrêt définitif de toute aide auto",
+         "Réglage 7 : activer/désactiver l'aide auto",
+         "Réactiver réinitialise ; H reste disponible"}
     };
     const char *(*pages)[8] = app_locale == 2 ? fr_pages : app_locale == 1 ? en_pages : zh_pages;
     int page = 0;
@@ -1007,137 +1018,86 @@ static void usage_page(Gc gc, AppState *app) {
         wait_release();
         if (key == 5 || key == 6) return;
         if (key == 3 && page > 0) --page;
-        if (key == 4 && page < 2) ++page;
+        if (key == 4 && page < 3) ++page;
     }
 }
 
-typedef enum {
-    TUTORIAL_SCREEN_HOME,
-    TUTORIAL_SCREEN_BROWSER,
-    TUTORIAL_SCREEN_BROWSER_SELECTED,
-    TUTORIAL_SCREEN_READER,
-    TUTORIAL_SCREEN_READER_PAGE2
-} TutorialScreen;
+enum {
+    SHORTCUT_HOME = 1,
+    SHORTCUT_BROWSER = 2,
+    SHORTCUT_READER = 4
+};
 
-typedef struct {
-    TutorialScreen screen;
+static uint32_t shortcut_hints_seen;
+
+static int shortcut_hints(Gc gc, AppState *app, const char *data_dir,
+                          uint32_t context, int search_active, int manual) {
+    const Theme *t = &themes[app->theme];
     const char *title;
-    const char *body1;
-    const char *body2;
-    int key;
-    int x, y, w, h;
-} TutorialStep;
-
-static const char *tutorial_key_label(const TutorialStep *step) {
-    switch (step->key) {
-        case 2: return L("下", "Down", "Bas");
-        case 3: return L("左", "Left", "Gauche");
-        case 4: return L("右", "Right", "Droite");
-        case 5: return "Enter";
-        case 6: return "Esc";
-        case 12: return "0";
-        default: return "Enter";
+    const char *lines[6];
+    if (!manual && (app->shortcut_hints_disabled || (shortcut_hints_seen & context))) return 0;
+    shortcut_hints_seen |= context;
+    if (context == SHORTCUT_HOME) {
+        title = L("主页快捷键", "Home shortcuts", "Raccourcis : accueil");
+        lines[0] = L("上/下：选择最近阅读或菜单", "Up/Down: select a book or action", "Haut/Bas : choisir livre ou action");
+        lines[1] = L("Enter：打开选中项，继续阅读", "Enter: open selection, resume reading", "Enter : ouvrir, reprendre la lecture");
+        lines[2] = L("0：浏览 Documents 文档目录", "0: browse Documents", "0 : parcourir Documents");
+        lines[3] = L("(-)：打开阅读设置", "(-): open settings", "(-) : ouvrir les réglages");
+        lines[4] = L("H：随时重开当前快捷键提示", "H: reopen these shortcuts anytime", "H : revoir ces raccourcis à tout moment");
+        lines[5] = L("Esc：退出 nTexts", "Esc: exit nTexts", "Esc : quitter nTexts");
+    } else if (context == SHORTCUT_BROWSER) {
+        title = L("书库快捷键", "Library shortcuts", "Raccourcis : bibliothèque");
+        lines[0] = L("上/下：选择文件或文件夹", "Up/Down: select a file or folder", "Haut/Bas : choisir fichier ou dossier");
+        lines[1] = L("Enter：打开文件或进入文件夹", "Enter: open file or enter folder", "Enter : ouvrir fichier ou dossier");
+        lines[2] = L("F：按部分文件名筛选", "F: filter by part of the filename", "F : filtrer une partie du nom");
+        lines[3] = L("0：清除文件名筛选", "0: clear the filename filter", "0 : effacer le filtre des noms");
+        lines[4] = L("Esc：返回上级目录或主页", "Esc: parent folder or home", "Esc : dossier parent ou accueil");
+        lines[5] = L("H：重开提示，保留筛选和选择", "H: hints keep your filter and selection", "H : aide sans changer filtre ni choix");
+    } else if (search_active) {
+        title = L("阅读搜索快捷键", "Search shortcuts", "Raccourcis : recherche");
+        lines[0] = L("Enter/下/F：查找下一处", "Enter/Down/F: next match", "Enter/Bas/F : résultat suivant");
+        lines[1] = L("上：查找上一处", "Up: previous match", "Haut : résultat précédent");
+        lines[2] = L("左/右：翻页查看跨页命中词", "Left/Right: pages, including long matches", "Gauche/Droite : pages du résultat");
+        lines[3] = L("Esc：结束搜索，留在阅读页", "Esc: end search, stay in the reader", "Esc : finir la recherche, rester ici");
+        lines[4] = L("Menu：更多功能，G跳转，B书签", "Menu: actions; G: go to; B: bookmark", "Menu : actions ; G : aller ; B : signet");
+        lines[5] = L("H：重开提示，不改变搜索结果", "H: hints keep the current search match", "H : aide sans changer le résultat");
+    } else {
+        title = L("阅读快捷键", "Reader shortcuts", "Raccourcis : lecture");
+        lines[0] = L("左/右：翻页；上/下：按物理行移动", "Left/Right: pages; Up/Down: source lines", "Gauche/Droite : pages ; Haut/Bas : lignes");
+        lines[1] = L("Ctrl+上/下：跳到开头/结尾", "Ctrl+Up/Down: start/end of text", "Ctrl+Haut/Bas : début/fin du texte");
+        lines[2] = L("Ctrl+左/右：上一章/下一章", "Ctrl+Left/Right: previous/next chapter", "Ctrl+Gauche/Droite : changer de chapitre");
+        lines[3] = L("F：搜索；B：添加当前位置书签", "F: search; B: bookmark this position", "F : rechercher ; B : ajouter un signet");
+        lines[4] = L("G：跳转；Menu：功能与设置", "G: go to; Menu: actions and settings", "G : aller à ; Menu : actions et réglages");
+        lines[5] = L("Esc：返回主页，进度自动保存", "Esc: home; progress saves automatically", "Esc : accueil ; progression sauvegardée");
     }
-}
-
-static void tutorial_mock_screen(Gc gc, const Theme *t, TutorialScreen screen) {
+    app_log("hints", "show context=%lu manual=%d search=%d",
+            (unsigned long)context, manual, search_active);
+    gui_gc_begin(gc);
     set_color(gc, t->bg);
     gui_gc_fillRect(gc, 0, 0, SCREEN_W, SCREEN_H);
-    if (screen == TUTORIAL_SCREEN_HOME) {
-        draw_text(gc, L("nTexts阅读器", "nTexts Text Reader", "nTexts Lecteur de textes"), 8, 6, Bold12, t->fg);
-        draw_text(gc, L("最近阅读", "Recent books", "Lectures récentes"), 8, 32, Bold10, t->fg);
-        draw_text(gc, "1. tutorial_demo.txt.tns  12%", 10, 54, Regular10, t->fg);
-        draw_text(gc, TXT_HOME_BROWSE_DOCS, 10, 96, Regular10, t->fg);
-        draw_text(gc, TXT_SETTINGS, 10, 118, Regular10, t->fg);
-        draw_text(gc, TXT_FOOTER_HOME, 8, FOOTER_Y, Regular9, t->muted);
-    } else if (screen == TUTORIAL_SCREEN_BROWSER || screen == TUTORIAL_SCREEN_BROWSER_SELECTED) {
-        draw_text(gc, "Documents", 8, 6, Bold10, t->fg);
-        if (screen == TUTORIAL_SCREEN_BROWSER) {
-            set_color(gc, t->highlight_bg);
-            gui_gc_fillRect(gc, 4, 30, SCREEN_W - 8, 20);
-        } else {
-            set_color(gc, t->highlight_bg);
-            gui_gc_fillRect(gc, 4, 52, SCREEN_W - 8, 20);
-        }
-        draw_text(gc, L("[目录] Books", "[Folder] Books", "[Dossier] Books"), 10, 32, Regular10, t->fg);
-        draw_text(gc, "tutorial_demo.txt.tns", 10, 54, Regular10, t->fg);
-        draw_text(gc, "notes.txt.tns", 10, 76, Regular10, t->fg);
-        draw_text(gc, TXT_FOOTER_BROWSER, 8, FOOTER_Y, Regular9, t->muted);
-    } else {
-        draw_text(gc, L("nTexts 教学演示文档", "nTexts tutorial text", "Texte de démonstration nTexts"), 10, 12, Bold10, t->fg);
-        if (screen == TUTORIAL_SCREEN_READER_PAGE2) {
-            draw_wrapped_text(gc, L("这是第二页。刚才按右键以后，页面已经前进。",
-                                    "This is page two. Right advanced the page.",
-                                    "Voici la deuxième page. Droite avance."), 10, 40,
-                              SCREEN_W - 20, Regular10, t->fg);
-            draw_wrapped_text(gc, L("再按左键就会回到上一页。", "Left returns to the previous page.",
-                                    "Gauche revient à la page précédente."), 10, 86,
-                              SCREEN_W - 20, Regular10, t->fg);
-            draw_text(gc, L("2/8页  25%  UTF-8", "2/8 pages  25%  UTF-8", "2/8 pages  25%  UTF-8"), 6, SCREEN_H - 15, Regular9, t->muted);
-        } else {
-            draw_wrapped_text(gc, L("这是第一页。按右键翻到下一页。",
-                                    "This is page one. Press Right for the next page.",
-                                    "Première page. Droite passe à la suivante."), 10, 40,
-                              SCREEN_W - 20, Regular10, t->fg);
-            draw_wrapped_text(gc, L("阅读进度会自动保存。", "Progress saves automatically.",
-                                    "La progression est sauvegardée."), 10, 86,
-                              SCREEN_W - 20, Regular10, t->fg);
-            draw_text(gc, L("1/8页  12%  UTF-8", "1/8 pages  12%  UTF-8", "1/8 pages  12%  UTF-8"), 6, SCREEN_H - 15, Regular9, t->muted);
-        }
-    }
-}
-
-static void tutorial_center_page(Gc gc, AppState *app, const char *data_dir) {
-    const Theme *t = &themes[app->theme];
-    const TutorialStep steps[] = {
-        {TUTORIAL_SCREEN_HOME, L("打开书库", "Open library", "Ouvrir la bibliothèque"), L("主页按 0 进入 Documents 浏览器。", "Press 0 to browse Documents.", "Accueil : 0 parcourt Documents."), L("也可以从最近阅读续读。", "Recent books resume your reading.", "Reprenez une lecture récente."), 12, 6, 92, 180, 22},
-        {TUTORIAL_SCREEN_BROWSER, L("选择文件", "Choose file", "Choisir un fichier"), L("按下键选中演示文本文件。", "Press Down to select the demo file.", "Bas sélectionne le fichier exemple."), L("浏览器也支持进入文件夹。", "Enter opens folders too.", "Enter ouvre aussi les dossiers."), 2, 6, 30, 220, 44},
-        {TUTORIAL_SCREEN_BROWSER_SELECTED, L("打开文本", "Open text", "Ouvrir le texte"), L("按 Enter 打开选中的文本。", "Enter opens the selected text.", "Enter ouvre le fichier sélectionné."), L("支持 .txt 和 .txt.tns 文件。", "Supports .txt and .txt.tns files.", "Formats : .txt et .txt.tns."), 5, 6, 50, 220, 24},
-        {TUTORIAL_SCREEN_READER, L("翻到下一页", "Next page", "Page suivante"), L("按右键阅读下一页。", "Press Right for the next page.", "Droite affiche la page suivante."), L("阅读进度会自动保存。", "Progress saves automatically.", "La progression est sauvegardée."), 4, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER_PAGE2, L("返回上一页", "Previous page", "Page précédente"), L("按左键回到上一页。", "Press Left to go back.", "Gauche revient à la page précédente."), L("设置第8项切换语言。", "Settings item 8 changes language.", "Réglage 8 : changer de langue."), 3, 0, SCREEN_H - 20, SCREEN_W, 20},
-        {TUTORIAL_SCREEN_READER, L("返回书库", "Return home", "Retour à l'accueil"), L("按 Esc 返回书库。", "Press Esc to return home.", "Esc revient à l'accueil."), L("Menu按0选择单本编码。", "Menu then 0 selects book encoding.", "Menu puis 0 : encodage du livre."), 6, 0, SCREEN_H - 20, SCREEN_W, 20}
-    };
-    int count = (int)(sizeof(steps) / sizeof(steps[0]));
-    for (int i = 0; i < count;) {
-        int key;
-        char footer[96];
-        int panel_y;
-        const TutorialStep *step = &steps[i];
-        app_log("tutorial", "step %d/%d title=%s expect=%s",
-                i + 1, count, step->title, tutorial_key_label(step));
-        panel_y = step->y > 118 ? 18 : 136;
-        gui_gc_begin(gc);
-        tutorial_mock_screen(gc, t, step->screen);
-        fill_dim_outside(gc, step->x, step->y, step->w, step->h);
-        set_color(gc, t->bg);
-        gui_gc_fillRect(gc, 8, panel_y, SCREEN_W - 16, 76);
-        draw_text(gc, step->title, 14, panel_y + 6, Bold10, t->fg);
-        draw_text(gc, step->body1, 14, panel_y + 24, Regular9, t->fg);
-        draw_text(gc, step->body2, 14, panel_y + 42, Regular9, t->fg);
-        snprintf(footer, sizeof(footer), L("%d/%d  按%s继续  0跳过", "%d/%d  Press %s  0 skip", "%d/%d  %s pour continuer  0 ignorer"),
-                 i + 1, count, tutorial_key_label(step));
-        draw_text(gc, footer, 14, panel_y + 60, Regular9, t->muted);
-        gui_gc_finish(gc);
-        gui_gc_blit_to_screen(gc);
-
-        key = wait_key();
+    draw_text(gc, title, 10, 8, Bold12, t->fg);
+    for (int i = 0; i < 6; ++i)
+        draw_text(gc, lines[i], 10, 36 + i * 20, Regular9, t->fg);
+    set_color(gc, t->muted);
+    gui_gc_drawLine(gc, 8, 155, SCREEN_W - 8, 155);
+    draw_text(gc, TXT_HINTS_CLOSE_ONCE, 10, 164, Regular9, t->fg);
+    draw_text(gc, TXT_HINTS_DISABLE, 10, 182, Regular9, t->fg);
+    draw_text(gc, TXT_HINTS_REOPEN, 10, 204, Regular9, t->muted);
+    draw_text(gc, TXT_HINTS_RESTORE, 10, 222, Regular9, t->muted);
+    gui_gc_finish(gc);
+    gui_gc_blit_to_screen(gc);
+    for (;;) {
+        int key = wait_key();
         wait_release();
-        app_log("tutorial", "key step=%d got=%d expect=%d",
-                i + 1, key, step->key);
-        if (key == 12 && step->key != 12) {
-            uint32_t old_flags = app->tutorial_flags;
-            app->tutorial_flags = TUTORIAL_ALL_SKIPPED | TUTORIAL_READER_SEEN;
+        if (key == 5 || key == 6) return 1;
+        if (key == 12) {
+            uint32_t old_disabled = app->shortcut_hints_disabled;
+            app->shortcut_hints_disabled = 1;
             if (!storage_save_app(app, data_dir)) {
-                app->tutorial_flags = old_flags;
-                debug_fail_errno("tutorial_center_page:skip", data_dir);
-                return;
+                app->shortcut_hints_disabled = old_disabled;
+                debug_fail_errno("shortcut_hints:disable", data_dir);
             }
-            app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_SKIP_DONE);
-            return;
-        }
-        if (key == step->key) {
-            i++;
-            app_log("tutorial", "advance next=%d/%d", i + 1, count);
+            return 1;
         }
     }
 }
@@ -1158,14 +1118,14 @@ static int run_settings_item(Gc gc, AppState *app, const char *data_dir, Reader 
         }
         app_locale = app->locale;
     } else {
-        uint32_t old_flags = app->tutorial_flags;
-        app->tutorial_flags = 0;
+        uint32_t old_disabled = app->shortcut_hints_disabled;
+        app->shortcut_hints_disabled = !old_disabled;
         if (!storage_save_app(app, data_dir)) {
-            app->tutorial_flags = old_flags;
-            debug_fail_errno("run_settings_item:reset_tutorial", data_dir);
+            app->shortcut_hints_disabled = old_disabled;
+            debug_fail_errno("run_settings_item:shortcut_hints", data_dir);
             return -1;
         }
-        app_message(gc, app, TXT_TUTORIAL_DONE, TXT_TUTORIAL_RESET_DONE);
+        if (!app->shortcut_hints_disabled) shortcut_hints_seen = 0;
     }
     return 1;
 }
@@ -1196,7 +1156,8 @@ static int settings_menu(Gc gc, AppState *app, const char *data_dir, Reader *r) 
                  (unsigned long)app->chapter_rules.count);
         snprintf(items[4], sizeof(items[4]), "%s", L("5. 关于", "5. About", "5. À propos"));
         snprintf(items[5], sizeof(items[5]), "%s", L("6. 使用说明", "6. Help", "6. Aide"));
-        snprintf(items[6], sizeof(items[6]), "%s", L("7. 重置教学进度", "7. Reset tutorial", "7. Réinit. tutoriel"));
+        snprintf(items[6], sizeof(items[6]), L("7. 自动快捷键提示: %s", "7. Auto shortcut hints: %s", "7. Raccourcis automatiques : %s"),
+                 app->shortcut_hints_disabled ? L("关", "Off", "Non") : L("开", "On", "Oui"));
         snprintf(items[7], sizeof(items[7]), L("8. 语言: %s", "8. Language: %s", "8. Langue : %s"),
                  app->locale == 2 ? "Français" : app->locale == 1 ? "English" : L("中文", "Chinese", "Chinois"));
         gui_gc_begin(gc);
@@ -1413,6 +1374,7 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
         TextPosition before;
         if (!page_drawn) draw_page(&r);
         page_drawn = 0;
+        if (shortcut_hints(gc, app, data_dir, SHORTCUT_READER, r.search_active, 0)) continue;
         key = wait_key();
         if (!last_key_ctrl &&
             ((key == 4 && r.page + 1 < r.index.page_count) || (key == 3 && r.page > 0))) {
@@ -1432,6 +1394,10 @@ static int open_reader(const char *path, Gc gc, AppState *app, const char *data_
             continue;
         }
         wait_release();
+        if (key == 14) {
+            shortcut_hints(gc, app, data_dir, SHORTCUT_READER, r.search_active, 1);
+            continue;
+        }
         before = r.top;
         if (r.search_active) {
             if (key == 5 || key == 2 || key == 9) {
@@ -1520,7 +1486,7 @@ static void draw_home(Gc gc, AppState *app, int sel, int top) {
     }
 }
 
-static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
+static int browse_files(Gc gc, AppState *app, const char *data_dir, char *out, size_t outcap) {
     const char *documents = get_documents_dir();
     const Theme *t = &themes[app->theme];
     char cwd[512];
@@ -1571,13 +1537,18 @@ static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
                       top + i == sel ? t->highlight_fg : t->fg);
         }
         draw_text(gc, filter[0] ?
-                  L("F筛选  0清除  Esc上级/返回", "F filter  0 clear  Esc up/back",
-                    "F filtrer  0 effacer  Esc retour") : TXT_FOOTER_BROWSER,
+                  L("F筛选 0清除 H提示 Esc上级/返回", "F filter 0 clear H:tips Esc up/back",
+                    "F filtrer 0 effacer H:aide Esc retour") : TXT_FOOTER_BROWSER,
                   8, FOOTER_Y, Regular9, t->muted);
         gui_gc_finish(gc);
         gui_gc_blit_to_screen(gc);
+        if (shortcut_hints(gc, app, data_dir, SHORTCUT_BROWSER, 0, 0)) continue;
         key = wait_key();
         wait_release();
+        if (key == 14) {
+            shortcut_hints(gc, app, data_dir, SHORTCUT_BROWSER, 0, 1);
+            continue;
+        }
         if (key == 9) {
             uint16_t input[QUERY_LEN];
             if (request_u16_input(L("文件名筛选", "Filter filename", "Filtrer le nom"),
@@ -1627,20 +1598,6 @@ static int browse_files(Gc gc, AppState *app, char *out, size_t outcap) {
     }
 }
 
-static void run_tutorial_if_needed(Gc gc, AppState *app, const char *data_dir) {
-    if (app->tutorial_flags & TUTORIAL_ALL_SKIPPED) return;
-    if (app->tutorial_flags & TUTORIAL_READER_SEEN) return;
-    app_log("tutorial", "start");
-    tutorial_center_page(gc, app, data_dir);
-    if (app->tutorial_flags & TUTORIAL_ALL_SKIPPED) return;
-    app->tutorial_flags |= TUTORIAL_READER_SEEN;
-    if (!storage_save_app(app, data_dir)) {
-        app->tutorial_flags &= ~TUTORIAL_READER_SEEN;
-        debug_fail_errno("run_tutorial_if_needed:save", data_dir);
-        return;
-    }
-    app_log("tutorial", "done");
-}
 
 int ntexts_app_main(int argc, char **argv) {
     Gc gc;
@@ -1648,6 +1605,7 @@ int ntexts_app_main(int argc, char **argv) {
     char data_dir[512], selected[512];
     int sel = 0;
     int home_top = 0;
+    shortcut_hints_seen = 0;
     app_log("startup", "enter argc=%d", argc);
     enable_relative_paths(argv);
     storage_app_defaults(&app);
@@ -1682,15 +1640,19 @@ int ntexts_app_main(int argc, char **argv) {
         app_log("shutdown", "exit after argv path");
         return 0;
     }
-    run_tutorial_if_needed(gc, &app, data_dir);
     app_log("startup", "home loop begin");
     for (;;) {
         int key;
         int recent_count;
         int total;
         draw_home(gc, &app, sel, home_top);
+        if (shortcut_hints(gc, &app, data_dir, SHORTCUT_HOME, 0, 0)) continue;
         key = wait_key();
         wait_release();
+        if (key == 14) {
+            shortcut_hints(gc, &app, data_dir, SHORTCUT_HOME, 0, 1);
+            continue;
+        }
         recent_count = app.recent_count > MAX_RECENTS ? MAX_RECENTS : (int)app.recent_count;
         total = recent_count + 2;
         if (key == 1) sel = sel > 0 ? sel - 1 : total - 1;
@@ -1699,7 +1661,7 @@ int ntexts_app_main(int argc, char **argv) {
             settings_menu(gc, &app, data_dir, NULL);
         else if (key == 12) {
             memset(selected, 0, sizeof(selected));
-            if (browse_files(gc, &app, selected, sizeof(selected))) {
+            if (browse_files(gc, &app, data_dir, selected, sizeof(selected))) {
                 open_reader(selected, gc, &app, data_dir);
                 sel = home_top = 0;
             }
@@ -1718,7 +1680,7 @@ int ntexts_app_main(int argc, char **argv) {
                 sel = home_top = 0;
             } else if (sel == recent_count) {
                 memset(selected, 0, sizeof(selected));
-                if (browse_files(gc, &app, selected, sizeof(selected))) {
+                if (browse_files(gc, &app, data_dir, selected, sizeof(selected))) {
                     open_reader(selected, gc, &app, data_dir);
                     sel = home_top = 0;
                 }
@@ -1727,7 +1689,7 @@ int ntexts_app_main(int argc, char **argv) {
             }
         } else if (key == 7) {
             memset(selected, 0, sizeof(selected));
-            if (browse_files(gc, &app, selected, sizeof(selected))) {
+            if (browse_files(gc, &app, data_dir, selected, sizeof(selected))) {
                 open_reader(selected, gc, &app, data_dir);
                 sel = home_top = 0;
             }

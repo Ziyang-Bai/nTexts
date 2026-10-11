@@ -70,6 +70,18 @@ typedef struct {
     ChapterRules chapter_rules;
 } V4AppState;
 
+typedef struct {
+    uint32_t magic, version;
+    int font_choice, theme, margin_choice;
+    uint32_t tutorial_flags;
+    uint32_t recent_count;
+    RecentBook recents[MAX_RECENTS];
+    uint32_t history_count;
+    uint16_t history[MAX_HISTORY][QUERY_LEN];
+    ChapterRules chapter_rules;
+    uint32_t locale;
+} V5AppState;
+
 
 static void make_path(char *out, size_t capacity, const char *leaf) {
     snprintf(out, capacity, "%s/%s", test_directory, leaf);
@@ -798,7 +810,7 @@ static int test_app_state_integrity_and_v3_migration(void) {
     invalid.magic = 0;
     invalid.version = 0;
     invalid.theme = 99;
-    invalid.tutorial_flags = 0x7fffffffu;
+    invalid.shortcut_hints_disabled = 0x7fffffffu;
     invalid.locale = 99;
     invalid.recent_count = MAX_RECENTS + 1;
     snprintf(invalid.recents[0].path, sizeof(invalid.recents[0].path), "%s", "recoverable.txt");
@@ -809,8 +821,8 @@ static int test_app_state_integrity_and_v3_migration(void) {
     invalid.chapter_rules.count = MAX_CHAPTER_PATTERNS + 1;
     CHECK(storage_save_app(&invalid, test_directory));
     CHECK(storage_load_app(&loaded, test_directory));
-    CHECK(loaded.magic == APP_MAGIC && loaded.version == 5 && loaded.theme == 0 && loaded.locale == 0);
-    CHECK(loaded.tutorial_flags == TUTORIAL_READER_SEEN);
+    CHECK(loaded.magic == APP_MAGIC && loaded.version == 6 && loaded.theme == 0 && loaded.locale == 0);
+    CHECK(loaded.shortcut_hints_disabled == 0);
     CHECK(loaded.recent_count == 1 && loaded.recents[0].offset == 3);
     CHECK(loaded.history_count == 1 && loaded.history[0][QUERY_LEN - 1] == 0);
     CHECK(chapter_rules_validate(&loaded.chapter_rules) && loaded.chapter_rules.count == 0);
@@ -859,18 +871,137 @@ static int test_app_state_integrity_and_v3_migration(void) {
     CHECK(write_checked_raw(path, &invalid, sizeof(invalid)));
     CHECK(!storage_load_app(&loaded, test_directory) && loaded.locale == 0);
 
+    invalid = state;
+    invalid.shortcut_hints_disabled = 2;
+    CHECK(write_checked_raw(path, &invalid, sizeof(invalid)));
+    CHECK(!storage_load_app(&loaded, test_directory) && loaded.shortcut_hints_disabled == 0);
+
     memset(&legacy, 0, sizeof(legacy));
     legacy.magic = APP_MAGIC;
     legacy.version = LEGACY_VERSION;
     legacy.font_choice = 2;
     legacy.theme = 1;
     legacy.margin_choice = 1;
+    legacy.tutorial_flags = 0x80000001u;
+    legacy.recent_count = 1;
+    snprintf(legacy.recents[0].path, sizeof(legacy.recents[0].path), "legacy.txt");
+    legacy.recents[0].file_size = 50;
+    legacy.recents[0].offset = 12;
     legacy.history_count = 1;
     legacy.history[0][0] = 'q';
     CHECK(sizeof(legacy) == 6512 && write_bytes(path, &legacy, sizeof(legacy)));
     CHECK(storage_load_app(&loaded, test_directory));
-    CHECK(loaded.version == 5 && loaded.font_choice == 2 && loaded.theme == 1);
+    CHECK(loaded.version == 6 && loaded.font_choice == 2 && loaded.theme == 1);
+    CHECK(loaded.margin_choice == 1 && loaded.locale == 0 && loaded.shortcut_hints_disabled == 0);
+    CHECK(loaded.recent_count == 1 && loaded.recents[0].offset == 12 &&
+          strcmp(loaded.recents[0].path, "legacy.txt") == 0);
+    CHECK(loaded.history_count == 1 && loaded.history[0][0] == 'q');
     CHECK(loaded.chapter_rules.count == 0 && chapter_rules_validate(&loaded.chapter_rules));
+    return 1;
+}
+
+static int test_shortcut_hints_preferences_persist(void) {
+    static const uint32_t invalid_flags[] = {2u, 0x80000000u, 0xffffffffu};
+    AppState state;
+    AppState loaded;
+    AppState invalid;
+    char path[600];
+    size_t i;
+
+    make_path(path, sizeof(path), "app.state");
+    storage_app_defaults(&state);
+    CHECK(state.version == 6 && state.shortcut_hints_disabled == 0);
+    state.theme = 2;
+    state.locale = 1;
+    state.history_count = 1;
+    state.history[0][0] = 'h';
+    state.shortcut_hints_disabled = 1;
+    CHECK(storage_save_app(&state, test_directory));
+    CHECK(storage_load_app(&loaded, test_directory));
+    CHECK(loaded.version == 6 && loaded.shortcut_hints_disabled == 1);
+    CHECK(loaded.theme == 2 && loaded.locale == 1 &&
+          loaded.history_count == 1 && loaded.history[0][0] == 'h');
+    state.shortcut_hints_disabled = 0;
+    CHECK(storage_save_app(&state, test_directory));
+    CHECK(storage_load_app(&loaded, test_directory) && loaded.shortcut_hints_disabled == 0);
+
+    for (i = 0; i < sizeof(invalid_flags) / sizeof(invalid_flags[0]); ++i) {
+        invalid = state;
+        invalid.shortcut_hints_disabled = invalid_flags[i];
+        CHECK(write_checked_raw(path, &invalid, sizeof(invalid)));
+        CHECK(!storage_load_app(&loaded, test_directory));
+        CHECK(loaded.version == 6 && loaded.shortcut_hints_disabled == 0);
+        CHECK(storage_save_app(&invalid, test_directory));
+        CHECK(storage_load_app(&loaded, test_directory));
+        CHECK(loaded.shortcut_hints_disabled == 0 && loaded.theme == 2 && loaded.locale == 1);
+        CHECK(loaded.history_count == 1 && loaded.history[0][0] == 'h');
+    }
+    return 1;
+}
+
+static int test_v5_preferences_migrate_with_hints_enabled(void) {
+    static const uint32_t old_flags[] = {0u, 1u, 0x80000000u, 0x80000001u};
+    static const uint16_t pattern[] = {'A', 'c', 't', ' ', '*', 0};
+    V5AppState old_app;
+    AppState app;
+    char path[600];
+    unsigned char *data;
+    size_t size;
+    size_t i;
+    uint32_t locale;
+
+    memset(&old_app, 0, sizeof(old_app));
+    old_app.magic = APP_MAGIC;
+    old_app.version = 5;
+    old_app.font_choice = 2;
+    old_app.theme = 1;
+    old_app.margin_choice = 1;
+    old_app.recent_count = 1;
+    snprintf(old_app.recents[0].path, sizeof(old_app.recents[0].path), "v5-book.txt");
+    old_app.recents[0].file_size = 100;
+    old_app.recents[0].offset = 37;
+    old_app.history_count = 1;
+    old_app.history[0][0] = 0x4e2d;
+    old_app.history[0][1] = 0x00e9;
+    chapter_rules_defaults(&old_app.chapter_rules);
+    CHECK(chapter_rules_add(&old_app.chapter_rules, pattern) == 1);
+    CHECK(sizeof(old_app) == 7288 && sizeof(old_app) == sizeof(AppState));
+    make_path(path, sizeof(path), "app.state");
+
+    for (i = 0; i < sizeof(old_flags) / sizeof(old_flags[0]); ++i) {
+        old_app.tutorial_flags = old_flags[i];
+        for (locale = 0; locale <= 2; ++locale) {
+            old_app.locale = locale;
+            CHECK(write_checked_raw(path, &old_app, sizeof(old_app)));
+            CHECK(storage_load_app(&app, test_directory));
+            CHECK(app.version == 6 && app.shortcut_hints_disabled == 0 && app.locale == locale);
+            CHECK(app.font_choice == 2 && app.theme == 1 && app.margin_choice == 1);
+            CHECK(app.recent_count == 1 && app.history_count == 1);
+            CHECK(memcmp(app.recents, old_app.recents, sizeof(app.recents)) == 0);
+            CHECK(memcmp(app.history, old_app.history, sizeof(app.history)) == 0);
+            CHECK(memcmp(&app.chapter_rules, &old_app.chapter_rules, sizeof(app.chapter_rules)) == 0);
+            CHECK(storage_save_app(&app, test_directory));
+            CHECK(storage_load_app(&app, test_directory));
+            CHECK(app.version == 6 && app.shortcut_hints_disabled == 0 && app.locale == locale);
+        }
+    }
+
+    CHECK(write_checked_raw(path, &old_app, sizeof(old_app)));
+    data = read_bytes(path, &size);
+    CHECK(data != NULL);
+    data[100] ^= 1;
+    CHECK(write_bytes(path, data, size));
+    free(data);
+    CHECK(!storage_load_app(&app, test_directory));
+    CHECK(app.version == 6 && app.shortcut_hints_disabled == 0);
+
+    old_app.tutorial_flags = 2;
+    CHECK(write_checked_raw(path, &old_app, sizeof(old_app)));
+    CHECK(!storage_load_app(&app, test_directory));
+    old_app.tutorial_flags = 1;
+    old_app.locale = 3;
+    CHECK(write_checked_raw(path, &old_app, sizeof(old_app)));
+    CHECK(!storage_load_app(&app, test_directory));
     return 1;
 }
 
@@ -976,7 +1107,7 @@ static int test_v4_preferences_and_bookmarks_migrate(void) {
     old_app.version = 4;
     old_app.font_choice = 2;
     old_app.theme = 1;
-    old_app.tutorial_flags = TUTORIAL_READER_SEEN;
+    old_app.tutorial_flags = 0x80000001u;
     old_app.recent_count = 1;
     snprintf(old_app.recents[0].path, sizeof(old_app.recents[0].path), "migrate.txt");
     old_app.recents[0].file_size = 50;
@@ -987,8 +1118,8 @@ static int test_v4_preferences_and_bookmarks_migrate(void) {
     make_path(path, sizeof(path), "app.state");
     CHECK(write_checked_raw(path, &old_app, sizeof(old_app)));
     CHECK(storage_load_app(&app, test_directory));
-    CHECK(app.version == 5 && app.locale == 0 && app.font_choice == 2 && app.theme == 1);
-    CHECK(app.tutorial_flags == TUTORIAL_READER_SEEN &&
+    CHECK(app.version == 6 && app.locale == 0 && app.font_choice == 2 && app.theme == 1);
+    CHECK(app.shortcut_hints_disabled == 0 &&
           app.recent_count == 1 && app.recents[0].offset == 10);
     CHECK(app.history_count == 1 && app.history[0][0] == 0x65e5);
     app.locale = 1;
@@ -1414,6 +1545,8 @@ int main(int argc, char **argv) {
         {"test_french_chapters_and_index_cache", test_french_chapters_and_index_cache},
         {"test_bookmark_excerpt", test_bookmark_excerpt},
         {"test_app_state_integrity_and_v3_migration", test_app_state_integrity_and_v3_migration},
+        {"test_shortcut_hints_preferences_persist", test_shortcut_hints_preferences_persist},
+        {"test_v5_preferences_migrate_with_hints_enabled", test_v5_preferences_migrate_with_hints_enabled},
         {"test_book_state_integrity_encoding_and_v3_migration", test_book_state_integrity_encoding_and_v3_migration},
         {"test_v4_preferences_and_bookmarks_migrate", test_v4_preferences_and_bookmarks_migrate},
         {"test_manual_encoding_persists_per_book", test_manual_encoding_persists_per_book},

@@ -10,7 +10,8 @@
 
 #define APP_MAGIC 0x5053544eu
 #define BOOK_MAGIC 0x4b42544eu
-#define STATE_VERSION 5u
+#define APP_STATE_VERSION 6u
+#define BOOK_STATE_VERSION 5u
 #define PREVIOUS_STATE_VERSION 4u
 #define LEGACY_STATE_VERSION 3u
 
@@ -54,6 +55,18 @@ typedef struct {
     ChapterRules chapter_rules;
 } PreviousAppState;
 
+typedef struct {
+    uint32_t magic, version;
+    int font_choice, theme, margin_choice;
+    uint32_t tutorial_flags;
+    uint32_t recent_count;
+    RecentBook recents[MAX_RECENTS];
+    uint32_t history_count;
+    uint16_t history[MAX_HISTORY][QUERY_LEN];
+    ChapterRules chapter_rules;
+    uint32_t locale;
+} V5AppState;
+
 #define SIZE_ASSERT(name, condition) typedef char size_assert_##name[(condition) ? 1 : -1]
 SIZE_ASSERT(text_position, sizeof(TextPosition) == 8);
 SIZE_ASSERT(bookmark, sizeof(Bookmark) == 108);
@@ -64,6 +77,7 @@ SIZE_ASSERT(book_state, sizeof(BookState) == 2708);
 SIZE_ASSERT(legacy_app_state, sizeof(LegacyAppState) == 6512);
 SIZE_ASSERT(chapter_rules, sizeof(ChapterRules) == 772);
 SIZE_ASSERT(previous_app_state, sizeof(PreviousAppState) == 7284);
+SIZE_ASSERT(v5_app_state, sizeof(V5AppState) == 7288);
 SIZE_ASSERT(app_state, sizeof(AppState) == 7288);
 
 uint32_t storage_hash_path(const char *path) {
@@ -122,13 +136,12 @@ static int has_terminator(const void *data, size_t count, size_t unit_size) {
 }
 
 static int app_common_valid(uint32_t magic, uint32_t version, int font_choice, int theme,
-                            int margin_choice, uint32_t tutorial_flags, uint32_t recent_count,
+                            int margin_choice, uint32_t recent_count,
                             const RecentBook *recents, uint32_t history_count,
                             const uint16_t history[MAX_HISTORY][QUERY_LEN]) {
     uint32_t i;
     if (magic != APP_MAGIC || version == 0 || font_choice < 0 || font_choice > 2 ||
         theme < 0 || theme > 2 || margin_choice < 0 || margin_choice > 1 ||
-        (tutorial_flags & ~(TUTORIAL_READER_SEEN | TUTORIAL_ALL_SKIPPED)) ||
         recent_count > MAX_RECENTS || history_count > MAX_HISTORY) return 0;
     for (i = 0; i < recent_count; ++i) {
         if (!recents[i].path[0] || !has_terminator(recents[i].path, sizeof(recents[i].path), 1) ||
@@ -142,16 +155,26 @@ static int app_common_valid(uint32_t magic, uint32_t version, int font_choice, i
 
 static int app_valid(const AppState *state) {
     return app_common_valid(state->magic, state->version, state->font_choice, state->theme,
-                            state->margin_choice, state->tutorial_flags, state->recent_count,
+                            state->margin_choice, state->recent_count,
                             state->recents, state->history_count, state->history) &&
-           state->version == STATE_VERSION && state->locale <= 2 &&
+           state->version == APP_STATE_VERSION && state->shortcut_hints_disabled <= 1 &&
+           state->locale <= 2 &&
            chapter_rules_validate(&state->chapter_rules);
+}
+
+static int v5_app_valid(const V5AppState *state) {
+    return state->version == 5u && !(state->tutorial_flags & ~0x80000001u) &&
+           app_common_valid(state->magic, state->version, state->font_choice, state->theme,
+                            state->margin_choice, state->recent_count,
+                            state->recents, state->history_count, state->history) &&
+           state->locale <= 2 && chapter_rules_validate(&state->chapter_rules);
 }
 
 static int previous_app_valid(const PreviousAppState *state) {
     return state->version == PREVIOUS_STATE_VERSION &&
+           !(state->tutorial_flags & ~0x80000001u) &&
            app_common_valid(state->magic, state->version, state->font_choice, state->theme,
-                            state->margin_choice, state->tutorial_flags, state->recent_count,
+                            state->margin_choice, state->recent_count,
                             state->recents, state->history_count, state->history) &&
            chapter_rules_validate(&state->chapter_rules);
 }
@@ -161,12 +184,12 @@ static void repair_app(AppState *state) {
     uint32_t write = 0;
 
     state->magic = APP_MAGIC;
-    state->version = STATE_VERSION;
+    state->version = APP_STATE_VERSION;
     if (state->font_choice < 0 || state->font_choice > 2) state->font_choice = 1;
     if (state->theme < 0 || state->theme > 2) state->theme = 0;
     if (state->margin_choice < 0 || state->margin_choice > 1) state->margin_choice = 0;
     if (state->locale > 2) state->locale = 0;
-    state->tutorial_flags &= TUTORIAL_READER_SEEN | TUTORIAL_ALL_SKIPPED;
+    if (state->shortcut_hints_disabled > 1) state->shortcut_hints_disabled = 0;
 
     if (state->recent_count > MAX_RECENTS) state->recent_count = MAX_RECENTS;
     for (read = 0; read < state->recent_count; ++read) {
@@ -199,8 +222,9 @@ static void repair_app(AppState *state) {
 
 static int legacy_app_valid(const LegacyAppState *state) {
     return state->version == LEGACY_STATE_VERSION &&
+           !(state->tutorial_flags & ~0x80000001u) &&
            app_common_valid(state->magic, state->version, state->font_choice, state->theme,
-                            state->margin_choice, state->tutorial_flags, state->recent_count,
+                            state->margin_choice, state->recent_count,
                             state->recents, state->history_count, state->history);
 }
 
@@ -227,7 +251,7 @@ static int book_common_valid(uint32_t magic, uint32_t version, const char *path,
 }
 
 static int book_valid(const BookState *state) {
-    return state->version == STATE_VERSION && encoding_valid(state->encoding) &&
+    return state->version == BOOK_STATE_VERSION && encoding_valid(state->encoding) &&
            (!state->encoding_override || encoding_valid(state->encoding_override)) &&
            book_common_valid(state->magic, state->version, state->path, state->file_size,
                              state->progress, state->bookmark_count, state->bookmarks);
@@ -291,7 +315,7 @@ static int read_checked_payload(FILE *fp, void *data, size_t size) {
 void storage_app_defaults(AppState *state) {
     memset(state, 0, sizeof(*state));
     state->magic = APP_MAGIC;
-    state->version = STATE_VERSION;
+    state->version = APP_STATE_VERSION;
     state->font_choice = 1;
     state->theme = 0;
     state->margin_choice = 0;
@@ -302,7 +326,10 @@ int storage_load_app(AppState *state, const char *directory) {
     char path[600];
     FILE *fp;
     size_t length;
-    AppState candidate;
+    union {
+        AppState current;
+        V5AppState v5;
+    } candidate;
     LegacyAppState legacy;
     PreviousAppState previous;
     snprintf(path, sizeof(path), "%s/app.state", directory);
@@ -324,11 +351,19 @@ int storage_load_app(AppState *state, const char *directory) {
             return 0;
         }
         fclose(fp);
-        if (!app_valid(&candidate)) {
+        if (candidate.current.version == 5u) {
+            if (!v5_app_valid(&candidate.v5)) {
+                app_log("storage", "app fields");
+                return 0;
+            }
+            candidate.current.version = APP_STATE_VERSION;
+            candidate.current.shortcut_hints_disabled = 0;
+            app_log("storage", "app migrated v5");
+        } else if (!app_valid(&candidate.current)) {
             app_log("storage", "app fields");
             return 0;
         }
-        *state = candidate;
+        *state = candidate.current;
         return 1;
     }
     if (length == sizeof(previous) + 4) {
@@ -343,7 +378,8 @@ int storage_load_app(AppState *state, const char *directory) {
             return 0;
         }
         memcpy(state, &previous, sizeof(previous));
-        state->version = STATE_VERSION;
+        state->version = APP_STATE_VERSION;
+        state->shortcut_hints_disabled = 0;
         app_log("storage", "app migrated v4");
         return 1;
     }
@@ -359,7 +395,8 @@ int storage_load_app(AppState *state, const char *directory) {
             return 0;
         }
         memcpy(state, &legacy, sizeof(legacy));
-        state->version = STATE_VERSION;
+        state->version = APP_STATE_VERSION;
+        state->shortcut_hints_disabled = 0;
         chapter_rules_defaults(&state->chapter_rules);
         app_log("storage", "app migrated v3");
         return 1;
@@ -393,7 +430,7 @@ int storage_save_app(const AppState *state, const char *directory) {
 void storage_book_defaults(BookState *state, TextFile *text) {
     memset(state, 0, sizeof(*state));
     state->magic = BOOK_MAGIC;
-    state->version = STATE_VERSION;
+    state->version = BOOK_STATE_VERSION;
     strncpy(state->path, text->path, sizeof(state->path) - 1);
     state->file_size = text->size;
     state->file_mtime = text->mtime;
@@ -444,7 +481,7 @@ int storage_load_book(BookState *state, TextFile *text, const char *directory) {
             return 0;
         }
         fclose(fp);
-        if (candidate.version == STATE_VERSION && !encoding_valid(candidate.encoding_override) &&
+        if (candidate.version == BOOK_STATE_VERSION && !encoding_valid(candidate.encoding_override) &&
             candidate.encoding_override != 0 && encoding_valid(candidate.encoding) &&
             book_common_valid(candidate.magic, candidate.version, candidate.path,
                               candidate.file_size, candidate.progress, candidate.bookmark_count,
@@ -473,7 +510,7 @@ int storage_load_book(BookState *state, TextFile *text, const char *directory) {
             return 0;
         }
         memcpy(state, &previous, sizeof(previous));
-        state->version = STATE_VERSION;
+        state->version = BOOK_STATE_VERSION;
         app_log("storage", "book migrated v4");
     } else if (length == sizeof(legacy)) {
         if (fread(&legacy, 1, sizeof(legacy), fp) != sizeof(legacy)) {
