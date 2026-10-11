@@ -935,13 +935,13 @@ static void usage_page(Gc gc, AppState *app) {
          "阅读 Menu 按0手动选择单本编码",
          "编码: 自动/UTF-8/GB18030/UTF-16LE/BE",
          "章节规则: *多字符，?单字符"},
-        {"快捷键提示", "H 随时重开主页、书库或阅读提示",
+        {"快捷键提示", "H 打开当前界面的快捷键提示",
          "阅读搜索中按H显示搜索快捷键",
-         "Enter/Esc 仅关闭当前情境的提示",
-         "每种情境每次启动只自动提示一次",
-         "提示中按0永久关闭全部自动提示",
-         "设置第7项开关自动提示，开启后重置",
-         "自动提示关闭后，H仍然可用"}
+         "Enter/Esc 关闭本次提示",
+         "每个界面每次启动自动提示一次",
+         "提示中按0永久关闭自动提示",
+         "设置第7项开启或关闭自动提示",
+         "关闭自动提示后，仍可按H查看"}
     };
     static const char *en_pages[][8] = {
         {"Home and reading", "0 browse Documents; Enter resumes a book",
@@ -964,7 +964,7 @@ static void usage_page(Gc gc, AppState *app) {
          "Reader Menu: 0 picks this book's encoding",
          "Auto, UTF-8, GB18030, UTF-16 LE/BE",
          "Chapter rules: * many, ? one character"},
-        {"Shortcut hints", "H: reopen home, library or reader hints",
+        {"Shortcut hints", "H: open shortcut hints",
          "H during search: search-specific shortcuts",
          "Enter/Esc: close hints for this context",
          "Auto hints: once per context, per launch",
@@ -1043,7 +1043,7 @@ static int shortcut_hints(Gc gc, AppState *app, const char *data_dir,
         lines[1] = L("Enter：打开选中项，继续阅读", "Enter: open selection, resume reading", "Enter : ouvrir, reprendre la lecture");
         lines[2] = L("0：浏览 Documents 文档目录", "0: browse Documents", "0 : parcourir Documents");
         lines[3] = L("(-)：打开阅读设置", "(-): open settings", "(-) : ouvrir les réglages");
-        lines[4] = L("H：随时重开当前快捷键提示", "H: reopen these shortcuts anytime", "H : revoir ces raccourcis à tout moment");
+        lines[4] = L("H：打开快捷键提示", "H: open shortcut hints", "H : afficher les raccourcis");
         lines[5] = L("Esc：退出 nTexts", "Esc: exit nTexts", "Esc : quitter nTexts");
     } else if (context == SHORTCUT_BROWSER) {
         title = L("书库快捷键", "Library shortcuts", "Raccourcis : bibliothèque");
@@ -1052,7 +1052,7 @@ static int shortcut_hints(Gc gc, AppState *app, const char *data_dir,
         lines[2] = L("F：按部分文件名筛选", "F: filter by part of the filename", "F : filtrer une partie du nom");
         lines[3] = L("0：清除文件名筛选", "0: clear the filename filter", "0 : effacer le filtre des noms");
         lines[4] = L("Esc：返回上级目录或主页", "Esc: parent folder or home", "Esc : dossier parent ou accueil");
-        lines[5] = L("H：重开提示，保留筛选和选择", "H: hints keep your filter and selection", "H : aide sans changer filtre ni choix");
+        lines[5] = L("H：打开快捷键提示", "H: open shortcut hints", "H : afficher les raccourcis");
     } else if (search_active) {
         title = L("阅读搜索快捷键", "Search shortcuts", "Raccourcis : recherche");
         lines[0] = L("Enter/下/F：查找下一处", "Enter/Down/F: next match", "Enter/Bas/F : résultat suivant");
@@ -1060,7 +1060,7 @@ static int shortcut_hints(Gc gc, AppState *app, const char *data_dir,
         lines[2] = L("左/右：翻页查看跨页命中词", "Left/Right: pages, including long matches", "Gauche/Droite : pages du résultat");
         lines[3] = L("Esc：结束搜索，留在阅读页", "Esc: end search, stay in the reader", "Esc : finir la recherche, rester ici");
         lines[4] = L("Menu：更多功能，G跳转，B书签", "Menu: actions; G: go to; B: bookmark", "Menu : actions ; G : aller ; B : signet");
-        lines[5] = L("H：重开提示，不改变搜索结果", "H: hints keep the current search match", "H : aide sans changer le résultat");
+        lines[5] = L("H：打开快捷键提示", "H: open shortcut hints", "H : afficher les raccourcis");
     } else {
         title = L("阅读快捷键", "Reader shortcuts", "Raccourcis : lecture");
         lines[0] = L("左/右：翻页；上/下：按物理行移动", "Left/Right: pages; Up/Down: source lines", "Gauche/Droite : pages ; Haut/Bas : lignes");
